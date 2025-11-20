@@ -192,3 +192,73 @@ def build_temporal_graphs(df, nodes, node_to_idx, edge_index, lookback_days = LO
     print(f"Average active nodes per graph: {np.mean([d.num_active_nodes for d in data_list]):.1f}")
     
     return data_list
+
+from torch_geometric.utils import subgraph
+from torch_geometric.data import HeteroData
+def get_time_window_subgraph(hetero_data, start_time, context_length):
+    mask = (hetero_data["earthquake_source"].t >= start_time) & (hetero_data["earthquake_source"].t < (start_time + context_length + 1))
+    node_idx = torch.nonzero(mask).view(-1)
+    subgraph_sample = HeteroData()
+    subgraph_sample['earthquake_source'].x = hetero_data['earthquake_source'].x[node_idx]
+    subgraph_sample['earthquake_source'].y = hetero_data['earthquake_source'].y[node_idx]
+    subgraph_sample['earthquake_source'].t = hetero_data['earthquake_source'].t[node_idx]
+    subgraph_sample['t_predict'] = start_time + context_length + 1
+    for edge_type in hetero_data.edge_types:
+        edge_index, edge_mask = subgraph(node_idx, hetero_data[edge_type].edge_index, relabel_nodes=True)
+        subgraph_sample[edge_type].edge_index = edge_index
+    return subgraph_sample
+
+
+def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, BATCH_SIZE = 8):
+    unique_nodes = df["fault_radius"].unique()
+    N = len(unique_nodes)
+
+    import math
+    import numpy as np
+    group_by_nodes = df.groupby("fault_radius")
+    num_nodes = len(group_by_nodes)
+    latest_time = math.ceil(max(group_by_nodes.aggregate("max")["event_time"])) * 12
+    fault_radii = list(group_by_nodes.count().index)
+
+    node_to_event_labels = np.empty((num_nodes, latest_time))
+    i = 0
+    for node, group_df in group_by_nodes:
+        event_labels = np.zeros(latest_time)
+        event_times_months = group_df["event_time"] * 12
+        for event_time in event_times_months:
+            event_labels[math.floor(event_time)] = 1
+        node_to_event_labels[i] = event_labels
+    i += 1
+
+    hetero_data = HeteroData()
+    hetero_data["earthquake_source"].x = torch.asarray(fault_radii * latest_time)
+    hetero_data["earthquake_source"].y = node_to_event_labels.flatten(order='F')
+    hetero_data["earthquake_source"].t = torch.arange(latest_time).repeat_interleave(N)
+
+    edge_index_spatial = []
+    for t in range(latest_time):
+        src = torch.arange(num_nodes - 1) + t * num_nodes
+        dst = src + 1
+        edge_index_spatial.append(torch.stack([src, dst]))
+
+    edge_index_spatial = torch.cat(edge_index_spatial, dim=1)
+    hetero_data['earthquake_source', 'spatial', 'earthquake_source'].edge_index = edge_index_spatial
+
+    edge_index_temporal = []
+    for t in range(latest_time - 1):
+        src = torch.arange(num_nodes) + t * num_nodes
+        dst = src + num_nodes
+        edge_index_temporal.append(torch.stack([src, dst]))
+
+    edge_index_temporal = torch.cat(edge_index_temporal, dim=1)
+    hetero_data['earthquake_source', 'temporal', 'earthquake_source'].edge_index = edge_index_temporal
+
+    from torch_geometric.loader import DataLoader
+    all_samples = [get_time_window_subgraph(start_time, CONTEXT_LENGTH) for start_time in range(latest_time - CONTEXT_LENGTH + 1)]
+    return all_samples
+    # TRAIN_INDEX_END = int(len(all_samples) * TRAIN_SPLIT)
+    # VAL_INDEX_END = TRAIN_INDEX_END + int(len(all_samples) * VAL_SPLIT)
+
+    # train_loader = DataLoader(all_samples[:TRAIN_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
+    # val_loader = DataLoader(all_samples[TRAIN_INDEX_END:VAL_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
+    # test_loader = DataLoader(all_samples[VAL_INDEX_END:], batch_size=BATCH_SIZE, shuffle=True)

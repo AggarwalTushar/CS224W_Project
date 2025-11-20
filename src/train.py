@@ -1,5 +1,5 @@
 from config import LOOKBACK_DAYS, PREDICTION_HORIZONS, DATA_FILE, DIST_THRESHOLD_KM, OUT_DIR, EPOCHS, LR, WEIGHT_DECAY, HIDDEN_DIM, OUT_DIM, DROPOUT, BATCH_SIZE
-from data_utils import load_and_prepare_data, build_edge_index, build_temporal_graphs
+from data_utils import load_and_prepare_data, build_edge_index, build_temporal_graphs, build_temporal_snapshot_graph
 from plot_utils import plot_training_curves, plot_roc_curves, plot_precision_recall_curves, plot_confusion_matrices, plot_performance_metrics, plot_comprehensive_summary
 from model import GraphSAGE, FocalLoss
 import torch
@@ -226,21 +226,29 @@ def main():
     df = load_and_prepare_data(DATA_FILE)
     
     print("Building spatial graphs")
-    nodes, node_to_idx, edge_index = build_edge_index(df, DIST_THRESHOLD_KM)
+    # nodes, node_to_idx, edge_index = build_edge_index(df, DIST_THRESHOLD_KM)
+    all_samples = build_temporal_snapshot_graph(df)
     
-    print("Building graphs data")
-    data_list = build_temporal_graphs(df, nodes, node_to_idx, edge_index, LOOKBACK_DAYS)
+    TRAIN_INDEX_END = int(len(all_samples) * TRAIN_SPLIT)
+    VAL_INDEX_END = TRAIN_INDEX_END + int(len(all_samples) * VAL_SPLIT)
+
+    train_loader = DataLoader(all_samples[:TRAIN_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
+    val_loader = DataLoader(all_samples[TRAIN_INDEX_END:VAL_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
+    test_loader = DataLoader(all_samples[VAL_INDEX_END:], batch_size=BATCH_SIZE, shuffle=True)
+
+    # print("Building graphs data")
+    # data_list = build_temporal_graphs(df, nodes, node_to_idx, edge_index, LOOKBACK_DAYS)
     
     print("Training model")
-    model, scaler = train_model(data_list)
+    model, scaler = train_model(all_samples)
     
     print("Training complete")
-    torch.save({
-        'model_state': model.state_dict(),
-        'scaler': scaler,
-        'nodes': nodes,
-        'edge_index': edge_index
-    }, os.path.join(OUT_DIR, "graphsage_unified.pth"))
+    # torch.save({
+    #     'model_state': model.state_dict(),
+    #     'scaler': scaler,
+    #     'nodes': nodes,
+    #     'edge_index': edge_index
+    # }, os.path.join(OUT_DIR, "graphsage_unified.pth"))
 
 
 if __name__ == "__main__":
