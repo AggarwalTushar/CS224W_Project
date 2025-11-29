@@ -122,7 +122,8 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
         for batch in test_loader:
             batch = batch.to(DEVICE)
             logits = model(batch)
-            targets = batch.y[batch.node_mask]
+            # targets = batch.y[batch.node_mask]
+            targets = batch.y
             test_logits.append(logits.cpu())
             test_targets.append(targets.cpu())
     
@@ -251,7 +252,7 @@ def main():
     
     print("Building spatial graphs")
     # nodes, node_to_idx, edge_index = build_edge_index(df, DIST_THRESHOLD_KM)
-    all_samples = build_temporal_snapshot_graph(df)
+    all_samples = build_temporal_snapshot_graph(df, int(LOOKBACK_DAYS / 30))
     
     TRAIN_INDEX_END = int(len(all_samples) * TRAIN_SPLIT)
     VAL_INDEX_END = TRAIN_INDEX_END + int(len(all_samples) * VAL_SPLIT)

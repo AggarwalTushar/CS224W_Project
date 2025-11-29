@@ -224,18 +224,22 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     latest_time = math.ceil(max(group_by_nodes.aggregate("max")["event_time"])) * 12
     fault_radii = list(group_by_nodes.count().index)
 
-    # for h_idx, horizon in enumerate(PREDICTION_HORIZONS):
-    #     future_start = sample_date
-    #     future_end = sample_date + pd.Timedelta(days = horizon)
-    #     future_events = events[(events["datetime"] >= future_start) & (events["datetime"] < future_end)]
-    #     y[node_idx, h_idx] = float(len(future_events) > 0)
-
     node_to_event_labels = np.empty((num_nodes, latest_time, len(PREDICTION_HORIZONS)))
+    node_to_time_since_last = np.empty((num_nodes, latest_time))
     node_id = 0
     for node, group_df in group_by_nodes:
         event_labels = np.zeros((latest_time, len(PREDICTION_HORIZONS)))
         event_times_months = group_df["event_time"] * 12
+        prev_event_time = 0
         for event_time in event_times_months:
+            # set time since last
+            start_id = math.floor(prev_event_time)
+            end_id = math.floor(event_time)
+            node_to_time_since_last[node_id, start_id:end_id] = np.arange(0, end_id - start_id)
+            
+            prev_event_time = event_time
+
+            # set horizon labels
             for horizon_idx, pred_horizon in enumerate(PREDICTION_HORIZONS):
                 max_offset = -(int(pred_horizon / 30) - 1)
                 for offset in range(0, max_offset - 1, -1):
@@ -245,12 +249,16 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
         node_to_event_labels[node_id] = event_labels
         node_id += 1
 
-    # y = node_to_event_labels.flatten(order='F')
-
     hetero_data = HeteroData()
-    hetero_data["earthquake_source"].x = torch.tensor(fault_radii * latest_time).unsqueeze(-1)
-    hetero_data["earthquake_source"].x = hetero_data["earthquake_source"].x / hetero_data["earthquake_source"].x.norm()
-    hetero_data["earthquake_source"].y = node_to_event_labels.reshape((num_nodes * latest_time, len(PREDICTION_HORIZONS)), order="F")
+    hetero_data["earthquake_source"].y = torch.tensor(node_to_event_labels.reshape((num_nodes * latest_time, len(PREDICTION_HORIZONS)), order="F"))
+    fault_radii_feat = torch.tensor(fault_radii * latest_time).unsqueeze(-1)
+    # fault_radii_feat /= fault_radii_feat.norm()
+    # labels_as_feat = hetero_data["earthquake_source"].y[:, 0].unsqueeze(-1)
+    time_since_last_feat = torch.tensor(node_to_time_since_last.flatten(order="F")).unsqueeze(-1)
+    features = torch.hstack([fault_radii_feat, time_since_last_feat]).float()
+    hetero_data["earthquake_source"].x = features
+
+    # hetero_data["earthquake_source"].x = hetero_data["earthquake_source"].x / hetero_data["earthquake_source"].x.norm()
     hetero_data["earthquake_source"].t = torch.arange(latest_time).repeat_interleave(N)
 
     edge_index_spatial = []
