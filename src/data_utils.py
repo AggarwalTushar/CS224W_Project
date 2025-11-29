@@ -170,7 +170,6 @@ def build_temporal_graphs(df, nodes, node_to_idx, edge_index, lookback_days = LO
                 # Extract features
                 x[node_idx] = extract_node_features(hist_events, lookback_days)
                 
-                
                 # Compute targets for multiple horizons
                 for h_idx, horizon in enumerate(PREDICTION_HORIZONS):
                     future_start = sample_date
@@ -196,20 +195,25 @@ def build_temporal_graphs(df, nodes, node_to_idx, edge_index, lookback_days = LO
 from torch_geometric.utils import subgraph
 from torch_geometric.data import HeteroData
 def get_time_window_subgraph(hetero_data, start_time, context_length):
-    mask = (hetero_data["earthquake_source"].t >= start_time) & (hetero_data["earthquake_source"].t < (start_time + context_length + 1))
+    mask = (hetero_data["earthquake_source"].t >= start_time) & (hetero_data["earthquake_source"].t < (start_time + context_length))
     node_idx = torch.nonzero(mask).view(-1)
     subgraph_sample = HeteroData()
     subgraph_sample['earthquake_source'].x = hetero_data['earthquake_source'].x[node_idx]
-    subgraph_sample['earthquake_source'].y = hetero_data['earthquake_source'].y[node_idx]
     subgraph_sample['earthquake_source'].t = hetero_data['earthquake_source'].t[node_idx]
-    subgraph_sample['t_predict'] = start_time + context_length + 1
+    predict_nodes_mask = subgraph_sample['earthquake_source'].t == start_time + context_length - 1
+    # predict_nodes = np.nonzero(predict_nodes_mask)
+    nonzero = np.count_nonzero(predict_nodes_mask)
+    subgraph_sample['earthquake_source'].node_predict = predict_nodes_mask
+    subgraph_sample['earthquake_source'].y = torch.tensor(hetero_data['earthquake_source'].y[node_idx][predict_nodes_mask])
+    subgraph_sample.y = subgraph_sample['earthquake_source'].y
+
     for edge_type in hetero_data.edge_types:
         edge_index, edge_mask = subgraph(node_idx, hetero_data[edge_type].edge_index, relabel_nodes=True)
         subgraph_sample[edge_type].edge_index = edge_index
     return subgraph_sample
 
 
-def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, BATCH_SIZE = 8):
+def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     unique_nodes = df["fault_radius"].unique()
     N = len(unique_nodes)
 
@@ -220,19 +224,33 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, BATCH_SIZE = 8):
     latest_time = math.ceil(max(group_by_nodes.aggregate("max")["event_time"])) * 12
     fault_radii = list(group_by_nodes.count().index)
 
-    node_to_event_labels = np.empty((num_nodes, latest_time))
-    i = 0
+    # for h_idx, horizon in enumerate(PREDICTION_HORIZONS):
+    #     future_start = sample_date
+    #     future_end = sample_date + pd.Timedelta(days = horizon)
+    #     future_events = events[(events["datetime"] >= future_start) & (events["datetime"] < future_end)]
+    #     y[node_idx, h_idx] = float(len(future_events) > 0)
+
+    node_to_event_labels = np.empty((num_nodes, latest_time, len(PREDICTION_HORIZONS)))
+    node_id = 0
     for node, group_df in group_by_nodes:
-        event_labels = np.zeros(latest_time)
+        event_labels = np.zeros((latest_time, len(PREDICTION_HORIZONS)))
         event_times_months = group_df["event_time"] * 12
         for event_time in event_times_months:
-            event_labels[math.floor(event_time)] = 1
-        node_to_event_labels[i] = event_labels
-    i += 1
+            for horizon_idx, pred_horizon in enumerate(PREDICTION_HORIZONS):
+                max_offset = -(int(pred_horizon / 30) - 1)
+                for offset in range(0, max_offset - 1, -1):
+                    curr_time_idx = math.floor(event_time)
+                    if curr_time_idx + offset >= 0:
+                        event_labels[curr_time_idx, horizon_idx] = 1
+        node_to_event_labels[node_id] = event_labels
+        node_id += 1
+
+    # y = node_to_event_labels.flatten(order='F')
 
     hetero_data = HeteroData()
-    hetero_data["earthquake_source"].x = torch.asarray(fault_radii * latest_time)
-    hetero_data["earthquake_source"].y = node_to_event_labels.flatten(order='F')
+    hetero_data["earthquake_source"].x = torch.tensor(fault_radii * latest_time).unsqueeze(-1)
+    hetero_data["earthquake_source"].x = hetero_data["earthquake_source"].x / hetero_data["earthquake_source"].x.norm()
+    hetero_data["earthquake_source"].y = node_to_event_labels.reshape((num_nodes * latest_time, len(PREDICTION_HORIZONS)), order="F")
     hetero_data["earthquake_source"].t = torch.arange(latest_time).repeat_interleave(N)
 
     edge_index_spatial = []
@@ -254,7 +272,7 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, BATCH_SIZE = 8):
     hetero_data['earthquake_source', 'temporal', 'earthquake_source'].edge_index = edge_index_temporal
 
     from torch_geometric.loader import DataLoader
-    all_samples = [get_time_window_subgraph(start_time, CONTEXT_LENGTH) for start_time in range(latest_time - CONTEXT_LENGTH + 1)]
+    all_samples = [get_time_window_subgraph(hetero_data, start_time, CONTEXT_LENGTH) for start_time in range(latest_time - CONTEXT_LENGTH + 1)]
     return all_samples
     # TRAIN_INDEX_END = int(len(all_samples) * TRAIN_SPLIT)
     # VAL_INDEX_END = TRAIN_INDEX_END + int(len(all_samples) * VAL_SPLIT)

@@ -55,7 +55,6 @@ class GraphSAGE(nn.Module):
         x = self.conv4(x, edge_index)
         x = self.bn4(x)
         
-        
         # Multi-task predictions
         outputs = [head(x).squeeze(-1) for head in self.heads]
         outputs = torch.stack(outputs, dim = 1) 
@@ -87,14 +86,17 @@ class RGCN(nn.Module):
     def __init__(self, in_channels, hidden_dim = 256, out_dim = 128, n_horizons = 3, dropout = 0.4):
         super().__init__()
         
-        self.conv1 = RGCNConv(in_channels, hidden_dim, normalize = True)
+        self.conv1 = RGCNConv(in_channels, hidden_dim, 2)
         self.bn1 = BatchNorm(hidden_dim)
         
-        self.conv2 = RGCNConv(hidden_dim, hidden_dim, normalize = True)
+        self.conv2 = RGCNConv(hidden_dim, hidden_dim, 2)
         self.bn2 = BatchNorm(hidden_dim)
         
-        self.conv3 = RGCNConv(hidden_dim, hidden_dim, normalize = True)
+        self.conv3 = RGCNConv(hidden_dim, hidden_dim, 2)
         self.bn3 = BatchNorm(hidden_dim)
+
+        self.conv4 = RGCNConv(hidden_dim, hidden_dim, 2)
+        self.bn4 = BatchNorm(hidden_dim)
         
         self.dropout = nn.Dropout(dropout)
         self.activation = nn.ReLU()
@@ -110,15 +112,19 @@ class RGCN(nn.Module):
         ])
     
     def forward(self, hetero_data):
-        
-        homogeneous_data = hetero_data.to_homogenous()
+        homogeneous_data = hetero_data.to_homogeneous()
 
+        # print(homogeneous_data)
 
         edge_index = homogeneous_data["edge_index"]
 
-        edge_type = homogeneous_data["edge_Type"]
+        edge_type = homogeneous_data["edge_type"]
 
-        x = hetero_data["earthquake_source"].x
+        x = homogeneous_data.x
+
+        # print(x.shape)
+        # print(edge_type.shape)
+        # print(edge_index.shape)
         # edge_index_temporal = hetero_data[("earthquake_source", "temporal", "earthquake_source")]
         # edge_index_spatial = hetero_data[("earthquake_source", "spatial", "earthquake_source")]
         x = self.conv1(x, edge_index, edge_type)
@@ -135,9 +141,21 @@ class RGCN(nn.Module):
         x = self.bn3(x)
         x = self.activation(x)
         x = self.dropout(x)
-        
+
+        x = self.conv4(x, edge_index, edge_type)
+        x = self.bn4(x)
+        x = self.activation(x)
+        x = self.dropout(x)
+
+        # t = hetero_data["earthquake_source"].t
+
+        # max_times = [tensor for tensor in torch.split(t, hetero_data.batch_size)]
+        # change this to be the node before
+        # pred_nodes = hetero_data["earthquake_source"].node_predict
+        prediction_nodes = x[hetero_data["earthquake_source"].node_predict, :]
+
         # Multi-task predictions
-        outputs = [head(x).squeeze(-1) for head in self.heads]
+        outputs = [head(prediction_nodes).squeeze(-1) for head in self.heads]
         outputs = torch.stack(outputs, dim = 1) 
         
         return outputs

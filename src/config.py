@@ -10,3 +10,7 @@ OUT_DIM = 256
 DROPOUT = 0.3
 BATCH_SIZE = 64  # Batch size for graphs (each graph = one time window)
 OUT_DIR = "./model/"
+
+TRAIN_SPLIT = .7
+VAL_SPLIT = .2
+TEST_SPLIT = .1
