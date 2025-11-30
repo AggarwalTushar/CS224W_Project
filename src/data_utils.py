@@ -225,7 +225,7 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     fault_radii = list(group_by_nodes.count().index)
 
     node_to_event_labels = np.empty((num_nodes, latest_time, len(PREDICTION_HORIZONS)))
-    node_to_time_since_last = np.empty((num_nodes, latest_time))
+    node_to_time_since_last = np.zeros((num_nodes, latest_time))
     node_id = 0
     for node, group_df in group_by_nodes:
         event_labels = np.zeros((latest_time, len(PREDICTION_HORIZONS)))
@@ -233,8 +233,8 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
         prev_event_time = 0
         for event_time in event_times_months:
             # set time since last
-            start_id = math.floor(prev_event_time)
-            end_id = math.floor(event_time)
+            start_id = math.floor(prev_event_time) + 1
+            end_id = math.floor(event_time) + 1
             node_to_time_since_last[node_id, start_id:end_id] = np.arange(0, end_id - start_id)
             
             prev_event_time = event_time
