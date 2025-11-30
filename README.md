@@ -1,9 +1,6 @@
 # CS224W_Project
 Project work for CSS224W Course (Autumn 25)
 
-# Earthquake Slip Prediction using Heterogeneous Graph Transformers
-
-This project uses a heterogeneous graph neural network with multi-head attention and stacked spatio-temporal blocks to predict earthquake slip occurrences on repeating fault 
 
 ## Graph Architecture
 
