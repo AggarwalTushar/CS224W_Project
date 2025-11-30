@@ -9,7 +9,7 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, accuracy_score
 
 from data_utils import load_and_prepare_data, build_spatiotemporal_dataset
-from model_spatiotemporal import HeterogeneousSpatioTemporalTransformer
+from model_transformers import HeterogeneousSpatioTemporalTransformer
 from model import FocalLoss 
 from plot_utils import (
     plot_training_curves, plot_roc_curves, plot_precision_recall_curves, 
