@@ -1,0 +1,9 @@
+numpy
+pandas
+matplotlib
+scikit-learn
+torch
+torch-geometric
+deepsnap
+torch-sparse
+ast
