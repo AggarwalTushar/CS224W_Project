@@ -83,20 +83,27 @@ class RGCN(nn.Module):
     """
     Graph neural network for predicting multiple time horizons
     """
-    def __init__(self, in_channels, hidden_dim = 256, out_dim = 128, n_horizons = 3, dropout = 0.4):
+    def __init__(self, in_channels, num_layers = 3, hidden_dim = 256, out_dim = 128, n_horizons = 3, dropout = 0.4):
         super().__init__()
         
-        self.conv1 = RGCNConv(in_channels, hidden_dim, 2)
-        self.bn1 = BatchNorm(hidden_dim)
-        
-        self.conv2 = RGCNConv(hidden_dim, hidden_dim, 2)
-        self.bn2 = BatchNorm(hidden_dim)
-        
-        self.conv3 = RGCNConv(hidden_dim, hidden_dim, 2)
-        self.bn3 = BatchNorm(hidden_dim)
+        self.num_layers = num_layers
 
-        self.conv4 = RGCNConv(hidden_dim, hidden_dim, 2)
-        self.bn4 = BatchNorm(hidden_dim)
+        self.conv1 = RGCNConv(in_channels, hidden_dim, 3)
+        self.bn1 = BatchNorm(hidden_dim)
+        self.conv_layers = [RGCNConv(hidden_dim, hidden_dim, 3) for _ in range(num_layers - 1)]
+        self.bn_layers = [BatchNorm(hidden_dim) for _ in range(num_layers - 1)]
+
+        # self.conv1 = RGCNConv(in_channels, hidden_dim, 2)
+        # self.bn1 = BatchNorm(hidden_dim)
+        
+        # self.conv2 = RGCNConv(hidden_dim, hidden_dim, 2)
+        # self.bn2 = BatchNorm(hidden_dim)
+        
+        # self.conv3 = RGCNConv(hidden_dim, hidden_dim, 2)
+        # self.bn3 = BatchNorm(hidden_dim)
+
+        # self.conv4 = RGCNConv(hidden_dim, hidden_dim, 2)
+        # self.bn4 = BatchNorm(hidden_dim)
         
         self.dropout = nn.Dropout(dropout)
         self.activation = nn.ReLU()
@@ -127,32 +134,46 @@ class RGCN(nn.Module):
         # print(edge_index.shape)
         # edge_index_temporal = hetero_data[("earthquake_source", "temporal", "earthquake_source")]
         # edge_index_spatial = hetero_data[("earthquake_source", "spatial", "earthquake_source")]
+
         x = self.conv1(x, edge_index, edge_type)
         x = self.bn1(x)
         x = self.activation(x)
         x = self.dropout(x)
-        
-        x = self.conv2(x, edge_index, edge_type)
-        x = self.bn2(x)
-        x = self.activation(x)
-        x = self.dropout(x)
-        
-        x = self.conv3(x, edge_index, edge_type)
-        x = self.bn3(x)
-        x = self.activation(x)
-        x = self.dropout(x)
 
-        x = self.conv4(x, edge_index, edge_type)
-        x = self.bn4(x)
-        x = self.activation(x)
-        x = self.dropout(x)
+        for i in range(self.num_layers - 1):
+            conv = self.conv_layers[i]
+            bn = self.bn_layers[i]
+            x = conv(x, edge_index, edge_type)
+            x = bn(x)
+            x = self.activation(x)
+            x = self.dropout(x)
+
+        # x = self.conv1(x, edge_index, edge_type)
+        # x = self.bn1(x)
+        # x = self.activation(x)
+        # x = self.dropout(x)
+        
+        # x = self.conv2(x, edge_index, edge_type)
+        # x = self.bn2(x)
+        # x = self.activation(x)
+        # x = self.dropout(x)
+        
+        # x = self.conv3(x, edge_index, edge_type)
+        # x = self.bn3(x)
+        # x = self.activation(x)
+        # x = self.dropout(x)
+
+        # x = self.conv4(x, edge_index, edge_type)
+        # x = self.bn4(x)
+        # x = self.activation(x)
+        # x = self.dropout(x)
 
         # t = hetero_data["earthquake_source"].t
 
         # max_times = [tensor for tensor in torch.split(t, hetero_data.batch_size)]
         # change this to be the node before
         # pred_nodes = hetero_data["earthquake_source"].node_predict
-        prediction_nodes = x[hetero_data["earthquake_source"].node_predict, :]
+        prediction_nodes = x[homogeneous_data.node_predict, :]
 
         # Multi-task predictions
         outputs = [head(prediction_nodes).squeeze(-1) for head in self.heads]

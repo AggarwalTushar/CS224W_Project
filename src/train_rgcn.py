@@ -240,7 +240,7 @@ def train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader):
     # print(feat_dim)
     sample = next(iter(train_loader))[0]
     feat_dim = sample.num_node_features["earthquake_source"]
-    model = RGCN(feat_dim, HIDDEN_DIM, OUT_DIM)
+    model = RGCN(feat_dim, 4, HIDDEN_DIM, OUT_DIM)
     opt = optim.AdamW(model.parameters(), lr = LR, weight_decay = WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0 = 20, T_mult = 2)
     loss_fn = FocalLoss(alpha = 0.70, gamma = 2.0)

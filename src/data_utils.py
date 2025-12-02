@@ -197,20 +197,28 @@ from torch_geometric.data import HeteroData
 def get_time_window_subgraph(hetero_data, start_time, context_length):
     mask = (hetero_data["earthquake_source"].t >= start_time) & (hetero_data["earthquake_source"].t < (start_time + context_length))
     node_idx = torch.nonzero(mask).view(-1)
-    subgraph_sample = HeteroData()
-    subgraph_sample['earthquake_source'].x = hetero_data['earthquake_source'].x[node_idx]
-    subgraph_sample['earthquake_source'].t = hetero_data['earthquake_source'].t[node_idx]
-    predict_nodes_mask = subgraph_sample['earthquake_source'].t == start_time + context_length - 1
+    subset_dict = {
+        "earthquake_source": node_idx,
+    }
+    subgraph_hetero_sample = hetero_data.subgraph(subset_dict)
+    # subgraph_sample = HeteroData()
+    # subgraph_sample['earthquake_source'].x = hetero_data['earthquake_source'].x[node_idx]
+    # subgraph_sample['earthquake_source'].t = hetero_data['earthquake_source'].t[node_idx]
+    predict_nodes_mask = subgraph_hetero_sample['earthquake_source'].t == start_time + context_length - 1
     # predict_nodes = np.nonzero(predict_nodes_mask)
-    nonzero = np.count_nonzero(predict_nodes_mask)
-    subgraph_sample['earthquake_source'].node_predict = predict_nodes_mask
-    subgraph_sample['earthquake_source'].y = torch.tensor(hetero_data['earthquake_source'].y[node_idx][predict_nodes_mask])
-    subgraph_sample.y = subgraph_sample['earthquake_source'].y
+    # nonzero = np.count_nonzero(predict_nodes_mask)
+    subgraph_hetero_sample['earthquake_source'].node_predict = predict_nodes_mask
+    subgraph_hetero_sample['earthquake_source'].y = torch.tensor(hetero_data['earthquake_source'].y[node_idx][predict_nodes_mask])
+    subgraph_hetero_sample.y = subgraph_hetero_sample['earthquake_source'].y
+    # subgraph_sample.y = subgraph_sample['earthquake_source'].y
 
-    for edge_type in hetero_data.edge_types:
-        edge_index, edge_mask = subgraph(node_idx, hetero_data[edge_type].edge_index, relabel_nodes=True)
-        subgraph_sample[edge_type].edge_index = edge_index
-    return subgraph_sample
+    # node_idx_lr = np.arange(hetero_data["loading_rate"].num_nodes)
+
+    # for edge_type in hetero_data.edge_types:
+    #     if edge_type[0] == edge_type[2]:
+    #         edge_index, edge_mask = subgraph(node_idx, hetero_data[edge_type].edge_index, relabel_nodes=True)
+    #         subgraph_sample[edge_type].edge_index = edge_index
+    return subgraph_hetero_sample
 
 
 def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
@@ -226,10 +234,15 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
 
     node_to_event_labels = np.empty((num_nodes, latest_time, len(PREDICTION_HORIZONS)))
     node_to_time_since_last = np.zeros((num_nodes, latest_time))
+    node_to_events_per_month = np.zeros((num_nodes, latest_time))
     node_id = 0
+
+    loading_rate_nodes = np.zeros((num_nodes, 1)) # all constant lr for now
     for node, group_df in group_by_nodes:
         event_labels = np.zeros((latest_time, len(PREDICTION_HORIZONS)))
         event_times_months = group_df["event_time"] * 12
+        loading_rate = group_df["loading_rate"].iloc[-1] # all constant for now
+        loading_rate_nodes[node_id][0] = loading_rate
         prev_event_time = 0
         for event_time in event_times_months:
             # set time since last
@@ -246,6 +259,12 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
                     curr_time_idx = math.floor(event_time)
                     if curr_time_idx + offset >= 0:
                         event_labels[curr_time_idx, horizon_idx] = 1
+
+        # set monthly events
+        for j in range(CONTEXT_LENGTH, event_labels.shape[0]):
+            events_stream_for_node = event_labels[j-CONTEXT_LENGTH:j, 0]
+            node_to_events_per_month[node_id, j] = np.mean(events_stream_for_node)
+
         node_to_event_labels[node_id] = event_labels
         node_id += 1
 
@@ -255,11 +274,14 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     # fault_radii_feat /= fault_radii_feat.norm()
     # labels_as_feat = hetero_data["earthquake_source"].y[:, 0].unsqueeze(-1)
     time_since_last_feat = torch.tensor(node_to_time_since_last.flatten(order="F")).unsqueeze(-1)
-    features = torch.hstack([fault_radii_feat, time_since_last_feat]).float()
+    events_per_month_feat = torch.tensor(node_to_events_per_month.flatten(order="F")).unsqueeze(-1)
+    features = torch.hstack([fault_radii_feat, time_since_last_feat, events_per_month_feat]).float()
     hetero_data["earthquake_source"].x = features
 
     # hetero_data["earthquake_source"].x = hetero_data["earthquake_source"].x / hetero_data["earthquake_source"].x.norm()
     hetero_data["earthquake_source"].t = torch.arange(latest_time).repeat_interleave(N)
+
+    hetero_data["loading_rate"].x = torch.hstack((torch.tensor(loading_rate_nodes), torch.zeros((loading_rate_nodes.shape[0], 2)))).float()
 
     edge_index_spatial = []
     for t in range(latest_time):
@@ -278,6 +300,11 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
 
     edge_index_temporal = torch.cat(edge_index_temporal, dim=1)
     hetero_data['earthquake_source', 'temporal', 'earthquake_source'].edge_index = edge_index_temporal
+
+    edge_index_loading_rate = torch.stack((torch.arange(num_nodes).repeat(latest_time), torch.arange(num_nodes * latest_time)))
+
+    hetero_data['loading_rate', 'lr', 'earthquake_source'].edge_index = edge_index_loading_rate
+
 
     from torch_geometric.loader import DataLoader
     all_samples = [get_time_window_subgraph(hetero_data, start_time, CONTEXT_LENGTH) for start_time in range(latest_time - CONTEXT_LENGTH + 1)]
