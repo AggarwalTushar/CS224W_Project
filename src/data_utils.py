@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 from torch_geometric.data import Data
 from collections import defaultdict
-from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS
+from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS, USE_LOADING_RATE
 
 def haversine(lon1, lat1, lon2, lat2):
     "Calculates distance between two coordinates"
@@ -221,7 +221,7 @@ def get_time_window_subgraph(hetero_data, start_time, context_length):
     return subgraph_hetero_sample
 
 
-def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
+def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
     unique_nodes = df["fault_radius"].unique()
     N = len(unique_nodes)
 
@@ -258,7 +258,7 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
                 for offset in range(0, max_offset - 1, -1):
                     curr_time_idx = math.floor(event_time)
                     if curr_time_idx + offset >= 0:
-                        event_labels[curr_time_idx, horizon_idx] = 1
+                        event_labels[curr_time_idx + offset, horizon_idx] = 1
 
         # set monthly events
         for j in range(CONTEXT_LENGTH, event_labels.shape[0]):
@@ -281,7 +281,8 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     # hetero_data["earthquake_source"].x = hetero_data["earthquake_source"].x / hetero_data["earthquake_source"].x.norm()
     hetero_data["earthquake_source"].t = torch.arange(latest_time).repeat_interleave(N)
 
-    hetero_data["loading_rate"].x = torch.hstack((torch.tensor(loading_rate_nodes), torch.zeros((loading_rate_nodes.shape[0], 2)))).float()
+    if USE_LOADING_RATE:
+        hetero_data["loading_rate"].x = torch.hstack((torch.tensor(loading_rate_nodes), torch.zeros((loading_rate_nodes.shape[0], 2)))).float()
 
     edge_index_spatial = []
     for t in range(latest_time):
@@ -301,9 +302,9 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     edge_index_temporal = torch.cat(edge_index_temporal, dim=1)
     hetero_data['earthquake_source', 'temporal', 'earthquake_source'].edge_index = edge_index_temporal
 
-    edge_index_loading_rate = torch.stack((torch.arange(num_nodes).repeat(latest_time), torch.arange(num_nodes * latest_time)))
-
-    hetero_data['loading_rate', 'lr', 'earthquake_source'].edge_index = edge_index_loading_rate
+    if USE_LOADING_RATE:
+        edge_index_loading_rate = torch.stack((torch.arange(num_nodes).repeat(latest_time), torch.arange(num_nodes * latest_time)))
+        hetero_data['loading_rate', 'lr', 'earthquake_source'].edge_index = edge_index_loading_rate
 
 
     from torch_geometric.loader import DataLoader

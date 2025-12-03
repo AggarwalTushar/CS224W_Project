@@ -1,6 +1,7 @@
 from torch_geometric.nn import SAGEConv, BatchNorm
 from torch_geometric.nn import RGCNConv, to_hetero
 import torch, torch.nn as nn
+from config import USE_LOADING_RATE
 
 class GraphSAGE(nn.Module):
     """
@@ -87,10 +88,10 @@ class RGCN(nn.Module):
         super().__init__()
         
         self.num_layers = num_layers
-
-        self.conv1 = RGCNConv(in_channels, hidden_dim, 3)
+        num_relations = 3 if USE_LOADING_RATE else 2 
+        self.conv1 = RGCNConv(in_channels, hidden_dim, num_relations)
         self.bn1 = BatchNorm(hidden_dim)
-        self.conv_layers = [RGCNConv(hidden_dim, hidden_dim, 3) for _ in range(num_layers - 1)]
+        self.conv_layers = [RGCNConv(hidden_dim, hidden_dim, num_relations) for _ in range(num_layers - 1)]
         self.bn_layers = [BatchNorm(hidden_dim) for _ in range(num_layers - 1)]
 
         # self.conv1 = RGCNConv(in_channels, hidden_dim, 2)
