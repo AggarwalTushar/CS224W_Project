@@ -3,7 +3,7 @@ import pandas as pd
 import torch
 from torch_geometric.data import Data
 from collections import defaultdict
-from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS, USE_LOADING_RATE
+from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS, USE_LOADING_RATE, USE_RECURRENCE_TIME_TASK
 
 def haversine(lon1, lat1, lon2, lat2):
     "Calculates distance between two coordinates"
@@ -232,8 +232,14 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
     latest_time = math.ceil(max(group_by_nodes.aggregate("max")["event_time"])) * 12
     fault_radii = list(group_by_nodes.count().index)
 
-    node_to_event_labels = np.empty((num_nodes, latest_time, len(PREDICTION_HORIZONS)))
+    if USE_RECURRENCE_TIME_TASK:
+        node_to_event_labels = np.zeros((num_nodes, latest_time), dtype=float)
+        label_dim = 1
+    else:
+        node_to_event_labels = np.empty((num_nodes, latest_time, len(PREDICTION_HORIZONS)))
+        label_dim = len(PREDICTION_HORIZONS)
     node_to_time_since_last = np.zeros((num_nodes, latest_time))
+    node_to_time_to_next = np.zeros((num_nodes, latest_time), dtype=float) - 1
     node_to_events_per_month = np.zeros((num_nodes, latest_time))
     node_id = 0
 
@@ -249,27 +255,35 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
             start_id = math.floor(prev_event_time) + 1
             end_id = math.floor(event_time) + 1
             node_to_time_since_last[node_id, start_id:end_id] = np.arange(0, end_id - start_id)
-            
+
+            if USE_RECURRENCE_TIME_TASK:
+                # set remaining recurrence time
+                start_id_label = math.floor(prev_event_time)
+                end_id_label = math.floor(event_time)
+                node_to_time_to_next[node_id, start_id_label:end_id_label] = np.arange(event_time - start_id_label, event_time - end_id_label, -1, dtype=float)
+            else:
+                # set horizon labels
+                for horizon_idx, pred_horizon in enumerate(PREDICTION_HORIZONS):
+                    max_offset = -(int(pred_horizon / 30) - 1)
+                    for offset in range(0, max_offset - 1, -1):
+                        curr_time_idx = math.floor(event_time)
+                        if curr_time_idx + offset >= 0:
+                            event_labels[curr_time_idx + offset, horizon_idx] = 1
+
             prev_event_time = event_time
-
-            # set horizon labels
-            for horizon_idx, pred_horizon in enumerate(PREDICTION_HORIZONS):
-                max_offset = -(int(pred_horizon / 30) - 1)
-                for offset in range(0, max_offset - 1, -1):
-                    curr_time_idx = math.floor(event_time)
-                    if curr_time_idx + offset >= 0:
-                        event_labels[curr_time_idx + offset, horizon_idx] = 1
-
         # set monthly events
         for j in range(CONTEXT_LENGTH, event_labels.shape[0]):
             events_stream_for_node = event_labels[j-CONTEXT_LENGTH:j, 0]
             node_to_events_per_month[node_id, j] = np.mean(events_stream_for_node)
 
-        node_to_event_labels[node_id] = event_labels
+        if USE_RECURRENCE_TIME_TASK:
+            node_to_event_labels[node_id] = node_to_time_to_next[node_id]
+        else:
+            node_to_event_labels[node_id] = event_labels
         node_id += 1
 
     hetero_data = HeteroData()
-    hetero_data["earthquake_source"].y = torch.tensor(node_to_event_labels.reshape((num_nodes * latest_time, len(PREDICTION_HORIZONS)), order="F"))
+    hetero_data["earthquake_source"].y = torch.tensor(node_to_event_labels.reshape((num_nodes * latest_time, label_dim), order="F"), dtype=torch.float32)
     fault_radii_feat = torch.tensor(fault_radii * latest_time).unsqueeze(-1)
     # fault_radii_feat /= fault_radii_feat.norm()
     # labels_as_feat = hetero_data["earthquake_source"].y[:, 0].unsqueeze(-1)

@@ -11,6 +11,7 @@ DROPOUT = 0.3
 BATCH_SIZE = 64  # Batch size for graphs (each graph = one time window)
 OUT_DIR = "./model/"
 USE_LOADING_RATE = False
+USE_RECURRENCE_TIME_TASK = True
 
 TRAIN_SPLIT = .7
 VAL_SPLIT = .2

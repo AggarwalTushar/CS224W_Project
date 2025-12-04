@@ -1,7 +1,7 @@
 from torch_geometric.nn import SAGEConv, BatchNorm
 from torch_geometric.nn import RGCNConv, to_hetero
 import torch, torch.nn as nn
-from config import USE_LOADING_RATE
+from config import USE_LOADING_RATE, USE_RECURRENCE_TIME_TASK
 
 class GraphSAGE(nn.Module):
     """
@@ -118,6 +118,14 @@ class RGCN(nn.Module):
                 nn.Linear(out_dim * 4, 1)
             ) for _ in range(n_horizons)
         ])
+
+        # only if using recurrence time regression task
+        self.regression_head = nn.Sequential(
+                nn.Linear(out_dim, out_dim * 4),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(out_dim * 4, 1)
+        )
     
     def forward(self, hetero_data):
         homogeneous_data = hetero_data.to_homogeneous()
@@ -177,8 +185,11 @@ class RGCN(nn.Module):
         prediction_nodes = x[homogeneous_data.node_predict, :]
 
         # Multi-task predictions
-        outputs = [head(prediction_nodes).squeeze(-1) for head in self.heads]
-        outputs = torch.stack(outputs, dim = 1) 
+        if USE_RECURRENCE_TIME_TASK:
+            outputs = self.regression_head(prediction_nodes)
+        else:
+            outputs = [head(prediction_nodes).squeeze(-1) for head in self.heads]
+            outputs = torch.stack(outputs, dim = 1) 
         
         return outputs
 

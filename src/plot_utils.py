@@ -3,7 +3,7 @@ import seaborn as sns
 from matplotlib.gridspec import GridSpec
 from sklearn.metrics import roc_auc_score, confusion_matrix, roc_curve, precision_recall_curve
 import numpy as np
-from config import PREDICTION_HORIZONS
+from config import PREDICTION_HORIZONS, USE_RECURRENCE_TIME_TASK
 
 plt.style.use('seaborn-v0_8-paper')
 sns.set_palette("husl")
@@ -34,16 +34,17 @@ def plot_training_curves(history, filename):
     ax1.grid(True, alpha = 0.3)
     
     # AUC curves for each horizon
-    ax2.plot(history['val_epochs'], history['val_auc'], label = 'Average AUC', linewidth = 2.5, marker = 'o', markersize = 4, color = 'black')
-    for i, horizon in enumerate(PREDICTION_HORIZONS):
-        if f'val_auc_{horizon}d' in history:
-            ax2.plot(history['val_epochs'], history[f'val_auc_{horizon}d'], label = f'{horizon}-day', linewidth = 1.5, marker = 's', markersize = 3, alpha = 0.7)
-    ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('AUC-ROC')
-    ax2.set_title('Validation AUC by Prediction Horizon')
-    ax2.legend()
-    ax2.grid(True, alpha = 0.3)
-    ax2.set_ylim([0.5, 1.0])
+    if not USE_RECURRENCE_TIME_TASK:
+        ax2.plot(history['val_epochs'], history['val_auc'], label = 'Average AUC', linewidth = 2.5, marker = 'o', markersize = 4, color = 'black')
+        for i, horizon in enumerate(PREDICTION_HORIZONS):
+            if f'val_auc_{horizon}d' in history:
+                ax2.plot(history['val_epochs'], history[f'val_auc_{horizon}d'], label = f'{horizon}-day', linewidth = 1.5, marker = 's', markersize = 3, alpha = 0.7)
+        ax2.set_xlabel('Epoch')
+        ax2.set_ylabel('AUC-ROC')
+        ax2.set_title('Validation AUC by Prediction Horizon')
+        ax2.legend()
+        ax2.grid(True, alpha = 0.3)
+        ax2.set_ylim([0.5, 1.0])
     
     plt.tight_layout()
     plt.savefig(filename, bbox_inches = 'tight')

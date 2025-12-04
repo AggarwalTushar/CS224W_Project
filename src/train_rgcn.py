@@ -1,4 +1,4 @@
-from config import LOOKBACK_DAYS, PREDICTION_HORIZONS, DATA_FILE, DIST_THRESHOLD_KM, OUT_DIR, EPOCHS, LR, WEIGHT_DECAY, HIDDEN_DIM, OUT_DIM, DROPOUT, BATCH_SIZE, TRAIN_SPLIT, VAL_SPLIT
+from config import LOOKBACK_DAYS, PREDICTION_HORIZONS, DATA_FILE, DIST_THRESHOLD_KM, OUT_DIR, EPOCHS, LR, WEIGHT_DECAY, HIDDEN_DIM, OUT_DIM, DROPOUT, BATCH_SIZE, TRAIN_SPLIT, VAL_SPLIT, USE_RECURRENCE_TIME_TASK
 from data_utils import load_and_prepare_data, build_edge_index, build_temporal_graphs, build_temporal_snapshot_graph
 from plot_utils import plot_training_curves, plot_roc_curves, plot_precision_recall_curves, plot_confusion_matrices, plot_performance_metrics, plot_comprehensive_summary
 from model import RGCN, GraphSAGE, FocalLoss
@@ -19,24 +19,21 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
     """
     
     # Initialize model
-    # feat_dim = train_data[0].x.shape[1]
-    # model = GraphSAGE(feat_dim, HIDDEN_DIM, OUT_DIM, len(PREDICTION_HORIZONS), DROPOUT).to(DEVICE)
-    # opt = optim.AdamW(model.parameters(), lr = LR, weight_decay = WEIGHT_DECAY)
-    # scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0 = 20, T_mult = 2)
-    # loss_fn = FocalLoss(alpha = 0.70, gamma = 2.0)
-    
     best_val_auc = 0
+    best_val_loss = float("inf")
     best_state = None
     
     history = {
         'epochs': [],
         'train_loss': [],
         'val_epochs': [],
-        'val_loss': [],
-        'val_auc': []
+        'val_loss': []
     }
-    for horizon in PREDICTION_HORIZONS:
-        history[f'val_auc_{horizon}d'] = []
+    
+    if not USE_RECURRENCE_TIME_TASK:
+        history['val_auc']: []
+        for horizon in PREDICTION_HORIZONS:
+            history[f'val_auc_{horizon}d'] = []
     
     for epoch in range(1, epochs + 1):
         model.train()
@@ -48,7 +45,7 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
             # targets = batch.y[batch.node_mask]
             targets = batch.y
             loss = loss_fn(logits, targets)
-            
+
             opt.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -83,25 +80,35 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
             val_probs = 1 / (1 + np.exp(-val_logits))
             
             # Calculate AUC for each horizon
-            aucs = []
-            for i in range(len(PREDICTION_HORIZONS)):
-                if len(np.unique(val_targets[:, i])) > 1:
-                    auc = roc_auc_score(val_targets[:, i], val_probs[:, i])
-                    aucs.append(auc)
-                    history[f'val_auc_{PREDICTION_HORIZONS[i]}d'].append(auc)
-                else:
-                    history[f'val_auc_{PREDICTION_HORIZONS[i]}d'].append(0)
-            
-            avg_auc = np.mean(aucs) if aucs else 0
-            history['val_epochs'].append(epoch)
-            history['val_loss'].append(np.mean(val_losses))
-            history['val_auc'].append(avg_auc)
-            
-            if avg_auc > best_val_auc:
-                best_val_auc = avg_auc
-                best_state = model.state_dict()
-            
-            print(f"Epoch {epoch:03d} | Loss {np.mean(train_losses):.4f} | Val Loss {np.mean(val_losses):.4f} | Val AUC {avg_auc:.4f} | " + " | ".join([f"{PREDICTION_HORIZONS[i]}d: {aucs[i]:.3f}" for i in range(len(aucs))]))
+            if USE_RECURRENCE_TIME_TASK:
+                history['val_epochs'].append(epoch)
+                mean_val_loss = np.mean(val_losses)
+                history['val_loss'].append(mean_val_loss)
+                if mean_val_loss < best_val_loss:
+                    best_val_loss = mean_val_loss
+                    best_state = model.state_dict()
+
+                print(f"Epoch {epoch:03d} | Loss {np.mean(train_losses):.4f} | Val Loss {np.mean(val_losses):.4f}")
+            else:
+                aucs = []
+                for i in range(len(PREDICTION_HORIZONS)):
+                    if len(np.unique(val_targets[:, i])) > 1:
+                        auc = roc_auc_score(val_targets[:, i], val_probs[:, i])
+                        aucs.append(auc)
+                        history[f'val_auc_{PREDICTION_HORIZONS[i]}d'].append(auc)
+                    else:
+                        history[f'val_auc_{PREDICTION_HORIZONS[i]}d'].append(0)
+                
+                avg_auc = np.mean(aucs) if aucs else 0
+                history['val_epochs'].append(epoch)
+                history['val_loss'].append(np.mean(val_losses))
+                history['val_auc'].append(avg_auc)
+                
+                if avg_auc > best_val_auc:
+                    best_val_auc = avg_auc
+                    best_state = model.state_dict()
+                
+                print(f"Epoch {epoch:03d} | Loss {np.mean(train_losses):.4f} | Val Loss {np.mean(val_losses):.4f} | Val AUC {avg_auc:.4f} | " + " | ".join([f"{PREDICTION_HORIZONS[i]}d: {aucs[i]:.3f}" for i in range(len(aucs))]))
     
     # Plot training curves
     plot_training_curves(history, os.path.join(OUT_DIR, "training_curves.png"))
@@ -135,52 +142,58 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
     metrics_dict = {}
     best_thresholds = []
     
-    for i, horizon in enumerate(PREDICTION_HORIZONS):
-        print(f"\n--- Horizon: {horizon} days ---")
-        metrics_dict[horizon] = {}
-        
-        if len(np.unique(test_targets[:, i])) > 1:
-            auc = roc_auc_score(test_targets[:, i], test_probs[:, i])
+    if USE_RECURRENCE_TIME_TASK:
+        print("TODO")
+    else:
+        for i, horizon in enumerate(PREDICTION_HORIZONS):
+            print(f"\n--- Horizon: {horizon} days ---")
+            metrics_dict[horizon] = {}
             
-            # Find optimal threshold
-            best_f1 = 0
-            best_thresh = 0.5
-            for thresh in np.linspace(0.1, 0.9, 17):
-                preds = (test_probs[:, i] > thresh).astype(int)
-                _, _, f1, _ = precision_recall_fscore_support(test_targets[:, i], preds, average = "binary", zero_division=0)
-                if f1 > best_f1:
-                    best_f1 = f1
-                    best_thresh = thresh
-            
-            best_thresholds.append(best_thresh)
-            preds = (test_probs[:, i] > best_thresh).astype(int)
-            acc = accuracy_score(test_targets[:, i], preds)
-            prec, rec, f1, _ = precision_recall_fscore_support(test_targets[:, i], preds, average = "binary", zero_division=0)
-            
-            metrics_dict[horizon] = {
-                'auc': auc,
-                'accuracy': acc,
-                'precision': prec,
-                'recall': rec,
-                'f1': f1,
-                'threshold': best_thresh
-            }
-            
-            print(f"AUC: {auc:.4f} | Threshold: {best_thresh:.3f}")
-            print(f"ACC: {acc:.4f} | Prec: {prec:.4f} | Recall: {rec:.4f} | F1: {f1:.4f}")
-        else:
-            best_thresholds.append(0.5)
+            if len(np.unique(test_targets[:, i])) > 1:
+                auc = roc_auc_score(test_targets[:, i], test_probs[:, i])
+                
+                # Find optimal threshold
+                best_f1 = 0
+                best_thresh = 0.5
+                for thresh in np.linspace(0.1, 0.9, 17):
+                    preds = (test_probs[:, i] > thresh).astype(int)
+                    _, _, f1, _ = precision_recall_fscore_support(test_targets[:, i], preds, average = "binary", zero_division=0)
+                    if f1 > best_f1:
+                        best_f1 = f1
+                        best_thresh = thresh
+                
+                best_thresholds.append(best_thresh)
+                preds = (test_probs[:, i] > best_thresh).astype(int)
+                acc = accuracy_score(test_targets[:, i], preds)
+                prec, rec, f1, _ = precision_recall_fscore_support(test_targets[:, i], preds, average = "binary", zero_division=0)
+                
+                metrics_dict[horizon] = {
+                    'auc': auc,
+                    'accuracy': acc,
+                    'precision': prec,
+                    'recall': rec,
+                    'f1': f1,
+                    'threshold': best_thresh
+                }
+                
+                print(f"AUC: {auc:.4f} | Threshold: {best_thresh:.3f}")
+                print(f"ACC: {acc:.4f} | Prec: {prec:.4f} | Recall: {rec:.4f} | F1: {f1:.4f}")
+            else:
+                best_thresholds.append(0.5)
     
     # Generate all plots
     print("=" * 60)
     print("GENERATING PLOTS")
     print("=" * 60)
     
-    plot_roc_curves(test_targets, test_probs, os.path.join(OUT_DIR, "roc_curves.png"))
-    plot_precision_recall_curves(test_targets, test_probs, os.path.join(OUT_DIR, "pr_curves.png"))
-    plot_confusion_matrices(test_targets, test_probs, best_thresholds, os.path.join(OUT_DIR, "confusion_matrices.png"))
-    plot_performance_metrics(metrics_dict, os.path.join(OUT_DIR, "performance_metrics.png"))
-    plot_comprehensive_summary(metrics_dict, os.path.join(OUT_DIR, "comprehensive_summary.png"))
+    if USE_RECURRENCE_TIME_TASK:
+        print("TODO")
+    else:
+        plot_roc_curves(test_targets, test_probs, os.path.join(OUT_DIR, "roc_curves.png"))
+        plot_precision_recall_curves(test_targets, test_probs, os.path.join(OUT_DIR, "pr_curves.png"))
+        plot_confusion_matrices(test_targets, test_probs, best_thresholds, os.path.join(OUT_DIR, "confusion_matrices.png"))
+        plot_performance_metrics(metrics_dict, os.path.join(OUT_DIR, "performance_metrics.png"))
+        plot_comprehensive_summary(metrics_dict, os.path.join(OUT_DIR, "comprehensive_summary.png"))
     
     print("=" * 60)
     print("ALL PLOTS SAVED SUCCESSFULLY!")
@@ -243,7 +256,10 @@ def train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader):
     model = RGCN(feat_dim, 4, HIDDEN_DIM, OUT_DIM)
     opt = optim.AdamW(model.parameters(), lr = LR, weight_decay = WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0 = 20, T_mult = 2)
-    loss_fn = FocalLoss(alpha = 0.70, gamma = 2.0)
+    if USE_RECURRENCE_TIME_TASK:
+        loss_fn = torch.nn.MSELoss()
+    else:
+        loss_fn = FocalLoss(alpha = 0.70, gamma = 2.0)
     return train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_loader)
 
 def main():
