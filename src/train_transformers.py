@@ -9,7 +9,7 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, accuracy_score
 
 from data_utils import load_and_prepare_data, build_spatiotemporal_dataset
-from model_transformers import HeterogeneousSpatioTemporalTransformer
+from model_transformer import HeterogeneousTransformer
 from model import FocalLoss 
 from plot_utils import (
     plot_training_curves, plot_roc_curves, plot_precision_recall_curves, 
@@ -102,7 +102,7 @@ def train_model(epochs=EPOCHS, hidden_dim=HIDDEN_DIM, num_layers=2, num_heads=4,
     # Init Model
     num_nodes = train_raw[0].x_spatial.shape[0]
     
-    model = HeterogeneousSpatioTemporalTransformer(
+    model = HeterogeneousTransformer(
         num_nodes=num_nodes,
         temporal_feat_dim=CONFIG['temporal_dim'],
         hidden_dim=hidden_dim,
@@ -219,7 +219,7 @@ def train_model(epochs=EPOCHS, hidden_dim=HIDDEN_DIM, num_layers=2, num_heads=4,
                 print(f"Epoch {epoch:03d} | Loss {np.mean(train_losses):.4f} | Val set empty")
     
     # Plot training curves
-    plot_training_curves(history, os.path.join(OUT_DIR, f"training_curves_spatiotemporal_{file_name}.png"))
+    plot_training_curves(history, os.path.join(OUT_DIR, f"training_curves_transformer_{file_name}.png"))
     
     # Load best model
     if best_state is not None:
@@ -297,11 +297,11 @@ def train_model(epochs=EPOCHS, hidden_dim=HIDDEN_DIM, num_layers=2, num_heads=4,
         print("GENERATING PLOTS")
         print("=" * 60)
         
-        plot_roc_curves(test_targets, test_probs, os.path.join(OUT_DIR, f"roc_curves_spatiotemporal_{file_name}.png"))
-        plot_precision_recall_curves(test_targets, test_probs, os.path.join(OUT_DIR, f"pr_curves_spatiotemporal_{file_name}.png"))
-        plot_confusion_matrices(test_targets, test_probs, best_thresholds, os.path.join(OUT_DIR, f"confusion_matrices_spatiotemporal_{file_name}.png"))
-        plot_performance_metrics(metrics_dict, os.path.join(OUT_DIR, f"performance_metrics_spatiotemporal_{file_name}.png"))
-        plot_comprehensive_summary(metrics_dict, os.path.join(OUT_DIR, f"comprehensive_summary_spatiotemporal_{file_name}.png"))
+        plot_roc_curves(test_targets, test_probs, os.path.join(OUT_DIR, f"roc_curves_transformer_{file_name}.png"))
+        plot_precision_recall_curves(test_targets, test_probs, os.path.join(OUT_DIR, f"pr_curves_transformer_{file_name}.png"))
+        plot_confusion_matrices(test_targets, test_probs, best_thresholds, os.path.join(OUT_DIR, f"confusion_matrices_transformer_{file_name}.png"))
+        plot_performance_metrics(metrics_dict, os.path.join(OUT_DIR, f"performance_metrics_transformer_{file_name}.png"))
+        plot_comprehensive_summary(metrics_dict, os.path.join(OUT_DIR, f"comprehensive_summary_transformer_{file_name}.png"))
         
         print("ALL PLOTS SAVED SUCCESSFULLY!")
         
@@ -321,13 +321,13 @@ def train_model(epochs=EPOCHS, hidden_dim=HIDDEN_DIM, num_layers=2, num_heads=4,
                     'dropout': dropout
             },
             'metrics': metrics_dict
-        }, os.path.join(OUT_DIR, f"spatiotemporal_unified_{file_name}.pth"))
+        }, os.path.join(OUT_DIR, f"transformer_unified_{file_name}.pth"))
         
     print("Training Complete.")
     return model, metrics_dict
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Train SpatioTemporal Transformer for Earthquake Prediction')
+    parser = argparse.ArgumentParser(description='Train Transformer for Earthquake Prediction')
     parser.add_argument('--epochs', type=int, default=CONFIG['epochs'], help='Number of training epochs')
     parser.add_argument('--hidden_dim', type=int, default=CONFIG['hidden_dim'], help='Hidden dimension')
     parser.add_argument('--num_layers', type=int, default=CONFIG['num_layers'], help='Number of transformer layers')

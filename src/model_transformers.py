@@ -66,8 +66,8 @@ class SpatialAttention(nn.Module):
         return x + self.dropout(out)
 
 
-class SpatioTemporalBlock(nn.Module):
-    """One block of spatio-temporal message passing
+class TransformerBlock(nn.Module):
+    """One block of transformer message passing
     temporal->spatial aggregation (only for first block)
     spatial self-attention + feed-forward fusion
     """
@@ -161,7 +161,7 @@ class TemporalToSpatialAttention(nn.Module):
         return out
 
 
-class HeterogeneousSpatioTemporalTransformer(nn.Module):
+class HeterogeneousTransformer(nn.Module):
     """
     Heterogeneous graph with two node types:
     1. Spatial nodes: One per fault, feature = fault embedding
@@ -196,11 +196,11 @@ class HeterogeneousSpatioTemporalTransformer(nn.Module):
         # Distance bias for spatial attention
         self.distance_bias = DistanceBias(tau_km=tau_km)
 
-        # Build stacked spatiotemporal blocks
+        # Build stacked transformer blocks
         layers = []
         for i in range(num_layers):
             use_temporal = (i == 0)
-            layers.append(SpatioTemporalBlock(hidden_dim, num_heads, dropout, use_temporal=use_temporal))
+            layers.append(TransformerBlock(hidden_dim, num_heads, dropout, use_temporal=use_temporal))
         self.layers = nn.ModuleList(layers)
 
         # Final norm
