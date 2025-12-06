@@ -1,5 +1,5 @@
 from config import LOOKBACK_DAYS, PREDICTION_HORIZONS, DATA_FILE, DIST_THRESHOLD_KM, OUT_DIR, EPOCHS, LR, WEIGHT_DECAY, HIDDEN_DIM, OUT_DIM, DROPOUT, BATCH_SIZE, TRAIN_SPLIT, VAL_SPLIT, USE_RECURRENCE_TIME_TASK
-from data_utils import load_and_prepare_data, build_edge_index, build_temporal_graphs, build_temporal_snapshot_graph
+from data_utils import load_and_prepare_data, build_edge_index, build_temporal_graphs, build_temporal_snapshot_graph, process_repeaters_csv
 from plot_utils import plot_training_curves, plot_roc_curves, plot_precision_recall_curves, plot_confusion_matrices, plot_performance_metrics, plot_comprehensive_summary
 from model import RGCN, GraphSAGE, FocalLoss
 import torch
@@ -8,6 +8,7 @@ from torch_geometric.loader import DataLoader
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, accuracy_score
 import numpy as np
+import pandas as pd
 import os
 os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -264,8 +265,12 @@ def train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader):
 
 def main():
     print("Loading data...")
-    df = load_and_prepare_data(DATA_FILE)
-    
+    if "repeaters" in DATA_FILE:
+        df = process_repeaters_csv(DATA_FILE)
+    else:
+        df = load_and_prepare_data(DATA_FILE)
+
+
     print("Building spatial graphs")
     # nodes, node_to_idx, edge_index = build_edge_index(df, DIST_THRESHOLD_KM)
     all_samples = build_temporal_snapshot_graph(df, int(LOOKBACK_DAYS / 30))
@@ -277,22 +282,44 @@ def main():
     val_loader = DataLoader(all_samples[TRAIN_INDEX_END:VAL_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
     test_loader = DataLoader(all_samples[VAL_INDEX_END:], batch_size=BATCH_SIZE, shuffle=True)
 
-    
-
     # print("Building graphs data")
     # data_list = build_temporal_graphs(df, nodes, node_to_idx, edge_index, LOOKBACK_DAYS)
     
     print("Training model")
     # model, scaler = train_model(all_samples)
     model = train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader)
-    
+
     print("Training complete")
-    # torch.save({
-    #     'model_state': model.state_dict(),
-    #     'scaler': scaler,
-    #     'nodes': nodes,
-    #     'edge_index': edge_index
-    # }, os.path.join(OUT_DIR, "graphsage_unified.pth"))
+    torch.save({
+        'model_state': model.state_dict(),
+        # 'scaler': scaler, #TODO add this back in
+        # 'nodes': nodes,
+        # 'edge_index': edge_index
+    }, os.path.join(OUT_DIR, "rgcn_unified.pth"))
+
+    records = []
+    for t, sample in enumerate(all_samples):
+        out = model(sample)
+        for node_idx, node_pred in enumerate(out):
+            records.append({
+                'time_index': t,
+                # 'sample_date': pd.Timestamp(sample_date) if sample_date is not None else None,
+                'node_idx': int(node_idx),
+                # 'horizon_days': int(horizon),
+                'true_label': float(sample.y[node_idx, 0]),
+                'predicted_label': float(node_pred),
+                # 'prob_no_slip': 1.0 - p,
+                # 'prob_slip': p
+            })
+    # Create DataFrame
+    pred_df = pd.DataFrame.from_records(records)
+
+    # Save predictions summary with model-specific naming
+    out_preds_dir = os.path.join(OUT_DIR, 'predictions')
+    os.makedirs(out_preds_dir, exist_ok=True)
+    preds_filename = os.path.join(out_preds_dir, f'predictions_summary_rgcn.csv')
+    pred_df.to_csv(preds_filename, index=False)
+    print(f"Saved predictions summary to: {preds_filename}")
 
 
 if __name__ == "__main__":

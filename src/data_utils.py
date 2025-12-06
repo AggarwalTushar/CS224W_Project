@@ -4,6 +4,7 @@ import torch
 from torch_geometric.data import Data
 from collections import defaultdict
 from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS, USE_LOADING_RATE, USE_RECURRENCE_TIME_TASK
+from datetime import datetime, timedelta
 
 def haversine(lon1, lat1, lon2, lat2):
     "Calculates distance between two coordinates"
@@ -15,6 +16,82 @@ def haversine(lon1, lat1, lon2, lat2):
     c = 2 * np.arcsin(np.sqrt(a))
     return R * c
 
+def decimal_year_to_datetime(decimal_year):
+    """
+    Converts a decimal year (e.g., 1984.3297) to a pandas Timestamp.
+    """
+    year = int(decimal_year)
+    remainder = decimal_year - year
+    
+    # Calculate start of year and start of next year to get exact duration
+    start = datetime(year, 1, 1)
+    end = datetime(year + 1, 1, 1)
+    seconds = (end - start).total_seconds()
+    
+    # Add the fractional part
+    result = start + timedelta(seconds=remainder * seconds)
+    return pd.Timestamp(result)
+
+def process_repeaters_csv(path):
+    """
+    Load and reshape the repeaters.csv dataset.
+    Converts  (e1..e32) format to (one row per event) format
+    """
+    print(f"Processing repeaters data from {path}...")
+    df_raw = pd.read_csv(path)
+    
+    # Filter by distance along strike 'r', (-5 to 125 km)
+    if 'r' in df_raw.columns:
+        original_count = len(df_raw)
+        df_raw = df_raw[(df_raw['r'] >= -5) & (df_raw['r'] <= 125)]
+        print(f"Filtered families based on 'r': {original_count} -> {len(df_raw)}")
+    
+    long_data = []
+    
+    # Iterate over each family (row)
+    for _, row in df_raw.iterrows():
+        # We use seqid as the identifier (mapped to 'fault_radius' for compatibility)
+        node_id = row['seqid']
+        lat = row['lat']
+        lon = row['lon']
+        depth = row['depth']
+        
+        # Iterate through event columns (e1...e32 and mag1...mag32)
+        for i in range(1, 33):
+            time_col = f'e{i}'
+            mag_col = f'mag{i}' 
+            
+            # Check if event exists (time is not NA/NaN)
+            if time_col in row and pd.notna(row[time_col]):
+                val = row[time_col]
+                if str(val).strip().upper() == 'NA':
+                    continue
+                    
+                try:
+                    dec_year = float(val)
+                    dt = decimal_year_to_datetime(dec_year)
+                    
+                    # Get magnitude
+                    mag = 0.0
+                    if mag_col in row and pd.notna(row[mag_col]):
+                        m_val = row[mag_col]
+                        if str(m_val).strip().upper() != 'NA':
+                            mag = float(m_val)
+                    
+                    long_data.append({
+                        'fault_radius': node_id, # Acts as Node ID
+                        'latitude': lat,
+                        'longitude': lon,
+                        'depth': depth,
+                        'datetime': dt,
+                        'magnitude': mag,
+                        'event_time': dec_year
+                    })
+                except ValueError:
+                    continue
+
+    df_processed = pd.DataFrame(long_data)
+    return df_processed
 
 def load_and_prepare_data(path):
     """Load and convert to datetime"""
@@ -241,6 +318,7 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
     node_to_time_since_last = np.zeros((num_nodes, latest_time))
     node_to_time_to_next = np.zeros((num_nodes, latest_time), dtype=float) - 1
     node_to_events_per_month = np.zeros((num_nodes, latest_time))
+    node_to_events_this_month = np.zeros((num_nodes, latest_time))
     node_id = 0
 
     loading_rate_nodes = np.zeros((num_nodes, 1)) # all constant lr for now
@@ -252,15 +330,18 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
         prev_event_time = 0
         for event_time in event_times_months:
             # set time since last
-            start_id = math.floor(prev_event_time) + 1
+            start_id = math.floor(prev_event_time) + 1 # we might not want this +1 for recurrence task
             end_id = math.floor(event_time) + 1
             node_to_time_since_last[node_id, start_id:end_id] = np.arange(0, end_id - start_id)
+            node_to_events_this_month[node_id, math.floor(event_time)] += 1
+
+            #TODO add magnitudes as a feature
 
             if USE_RECURRENCE_TIME_TASK:
                 # set remaining recurrence time
                 start_id_label = math.floor(prev_event_time)
                 end_id_label = math.floor(event_time)
-                node_to_time_to_next[node_id, start_id_label:end_id_label] = np.arange(event_time - start_id_label, event_time - end_id_label, -1, dtype=float)
+                node_to_time_to_next[node_id, start_id_label:end_id_label] = np.arange(end_id_label - start_id_label, end_id_label - end_id_label, -1, dtype=float)
             else:
                 # set horizon labels
                 for horizon_idx, pred_horizon in enumerate(PREDICTION_HORIZONS):
@@ -285,11 +366,17 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
     hetero_data = HeteroData()
     hetero_data["earthquake_source"].y = torch.tensor(node_to_event_labels.reshape((num_nodes * latest_time, label_dim), order="F"), dtype=torch.float32)
     fault_radii_feat = torch.tensor(fault_radii * latest_time).unsqueeze(-1)
-    # fault_radii_feat /= fault_radii_feat.norm()
+    fault_radii_feat /= fault_radii_feat.max()
     # labels_as_feat = hetero_data["earthquake_source"].y[:, 0].unsqueeze(-1)
     time_since_last_feat = torch.tensor(node_to_time_since_last.flatten(order="F")).unsqueeze(-1)
+    time_since_last_feat /= time_since_last_feat.max()
     events_per_month_feat = torch.tensor(node_to_events_per_month.flatten(order="F")).unsqueeze(-1)
+    events_per_month_feat /= events_per_month_feat.max()
     features = torch.hstack([fault_radii_feat, time_since_last_feat, events_per_month_feat]).float()
+    if USE_RECURRENCE_TIME_TASK:
+        #we can use if there was an earthquake this month as a feature since we want to predict the next event
+        events_this_month_feat = torch.tensor(node_to_events_this_month.flatten(order="F")).unsqueeze(-1)
+        features = torch.hstack((features, events_this_month_feat)).float()
     hetero_data["earthquake_source"].x = features
 
     # hetero_data["earthquake_source"].x = hetero_data["earthquake_source"].x / hetero_data["earthquake_source"].x.norm()
@@ -324,9 +411,3 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
     from torch_geometric.loader import DataLoader
     all_samples = [get_time_window_subgraph(hetero_data, start_time, CONTEXT_LENGTH) for start_time in range(latest_time - CONTEXT_LENGTH + 1)]
     return all_samples
-    # TRAIN_INDEX_END = int(len(all_samples) * TRAIN_SPLIT)
-    # VAL_INDEX_END = TRAIN_INDEX_END + int(len(all_samples) * VAL_SPLIT)
-
-    # train_loader = DataLoader(all_samples[:TRAIN_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
-    # val_loader = DataLoader(all_samples[TRAIN_INDEX_END:VAL_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
-    # test_loader = DataLoader(all_samples[VAL_INDEX_END:], batch_size=BATCH_SIZE, shuffle=True)
