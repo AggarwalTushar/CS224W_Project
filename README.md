@@ -27,5 +27,17 @@ This project focuses on predicting future earthquake events Graph Neural Network
    pip install -r requirements.txt
    ```
 
+## Training
+
+To train the transformer model
+```bash
+# For default
+python src/train_transformer.py 
+# Custom configuration
+python src/train_transformer.py --epochs 100 --batch_size 16 --hidden_dim 16 --num_layers 2 --num_heads 4 --dropout 0.5
+# For help
+python src/train_transformer.py --help
+```
+
 ## Acknowledgments
 We would like to thank the instructors and TAs of the CS224W course for their guidance and support throughout the quarter.

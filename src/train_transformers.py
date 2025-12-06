@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 import os
 import argparse
+import random
 from tqdm import trange
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, accuracy_score
@@ -17,10 +18,16 @@ from plot_utils import (
 )
 from config import HIDDEN_DIM, OUT_DIR, EPOCHS, PREDICTION_HORIZONS, LOOKBACK_DAYS
 
+# Set random seeds for reproducibility
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
+
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 CONFIG = {
-    'data_file': "data/synthetic_data.xlsx",
+    # 'data_file': "data/synthetic_data.xlsx",
+    'data_file': "data/repeaters.csv",
     'epochs': EPOCHS,
     'batch_size': 16,
     'out_dir': OUT_DIR,
@@ -112,7 +119,7 @@ def train_model(epochs=EPOCHS, hidden_dim=HIDDEN_DIM, num_layers=2, num_heads=4,
         tau_km=25.0
     ).to(DEVICE)
     
-    optimizer = optim.AdamW(model.parameters(), lr=5e-4, weight_decay=1e-2)
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-2)
     criterion = FocalLoss(alpha=0.70, gamma=2.0)
     
     # Count parameters
@@ -213,7 +220,7 @@ def train_model(epochs=EPOCHS, hidden_dim=HIDDEN_DIM, num_layers=2, num_heads=4,
                     print(f"Early stopping at epoch {epoch}, best val AUC={best_val_auc:.4f}")
                     break
                 
-                print(f"Epoch {epoch:03d} | Loss {np.mean(train_losses):.4f} | Val Loss {np.mean(val_losses):.4f} | Val AUC {avg_auc:.4f} | " +
+                print(f"Epoch {epoch:03d} | Loss {np.mean(train_losses):.5f} | Val Loss {np.mean(val_losses):.4f} | Val AUC {avg_auc:.4f} | " +
                       " | ".join([f"{PREDICTION_HORIZONS[i]}d: {aucs[i]:.3f}" for i in range(len(aucs))]))
             else:
                 print(f"Epoch {epoch:03d} | Loss {np.mean(train_losses):.4f} | Val set empty")
