@@ -1,7 +1,7 @@
 from config import LOOKBACK_DAYS, PREDICTION_HORIZONS, DATA_FILE, DIST_THRESHOLD_KM, OUT_DIR, EPOCHS, LR, WEIGHT_DECAY, HIDDEN_DIM, OUT_DIM, DROPOUT, BATCH_SIZE
 from data_utils import load_and_prepare_data, build_edge_index, build_temporal_graphs
 from plot_utils import plot_training_curves, plot_roc_curves, plot_precision_recall_curves, plot_confusion_matrices, plot_performance_metrics, plot_comprehensive_summary
-from model import GraphSAGE, FocalLoss
+from model_graphsage import GraphSAGE, FocalLoss
 import torch
 import torch.optim as optim
 from torch_geometric.loader import DataLoader

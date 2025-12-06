@@ -94,17 +94,22 @@ def process_repeaters_csv(path):
     return df_processed
 
 def load_and_prepare_data(path):
-    """Load and convert to datetime"""
-    df = pd.read_excel(path)
-    df.columns = [c.strip().lower() for c in df.columns]
     
-    # Convert time to datetime so that it would be easy to do operations
-    if np.issubdtype(df["event_time"].dtype, np.number):
-        # Assume it's years since 2000
-        ref = pd.Timestamp("2000-01-01")
-        df["datetime"] = [ref + pd.DateOffset(months=int(y*12)) for y in df["event_time"].values]
+    if path.endswith("repeaters.csv"):
+        # Handle the new Repeaters dataset
+        df = process_repeaters_csv(path)
     else:
-        df["datetime"] = pd.to_datetime(df["event_time"], errors="coerce")
+        # Handle the original Synthetic dataset (Excel)
+        df = pd.read_excel(path)
+        df.columns = [c.strip().lower() for c in df.columns]
+        
+        # Convert time to datetime
+        if np.issubdtype(df["event_time"].dtype, np.number):
+            # Assume it's years since 2000
+            ref = pd.Timestamp("2000-01-01")
+            df["datetime"] = [ref + pd.DateOffset(months=int(y*12)) for y in df["event_time"].values]
+        else:
+            df["datetime"] = pd.to_datetime(df["event_time"], errors="coerce")
     
     df = df.sort_values("datetime").reset_index(drop=True)
     print(f"Loaded {len(df)} events from {df['datetime'].min()} to {df['datetime'].max()}")
@@ -366,12 +371,12 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
     hetero_data = HeteroData()
     hetero_data["earthquake_source"].y = torch.tensor(node_to_event_labels.reshape((num_nodes * latest_time, label_dim), order="F"), dtype=torch.float32)
     fault_radii_feat = torch.tensor(fault_radii * latest_time).unsqueeze(-1)
-    fault_radii_feat /= fault_radii_feat.max()
+    # fault_radii_feat /= fault_radii_feat.max()
     # labels_as_feat = hetero_data["earthquake_source"].y[:, 0].unsqueeze(-1)
     time_since_last_feat = torch.tensor(node_to_time_since_last.flatten(order="F")).unsqueeze(-1)
-    time_since_last_feat /= time_since_last_feat.max()
+    # time_since_last_feat /= time_since_last_feat.max()
     events_per_month_feat = torch.tensor(node_to_events_per_month.flatten(order="F")).unsqueeze(-1)
-    events_per_month_feat /= events_per_month_feat.max()
+    # events_per_month_feat /= events_per_month_feat.max()
     features = torch.hstack([fault_radii_feat, time_since_last_feat, events_per_month_feat]).float()
     if USE_RECURRENCE_TIME_TASK:
         #we can use if there was an earthquake this month as a feature since we want to predict the next event
@@ -411,3 +416,129 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
     from torch_geometric.loader import DataLoader
     all_samples = [get_time_window_subgraph(hetero_data, start_time, CONTEXT_LENGTH) for start_time in range(latest_time - CONTEXT_LENGTH + 1)]
     return all_samples
+
+def build_spatiotemporal_dataset(df, lookback_months=24):
+    """
+    Builds dataset with cumulative/stateful features:
+    1. Count (Cumulative since start)
+    2. Max Magnitude (Global max since start)
+    3. Months Ago (Time since last event)
+    """
+    # Setup Nodes
+    if 'seqid' in df.columns:
+        df['fault_radius'] = df['seqid']
+        
+    nodes = sorted(df["fault_radius"].unique())
+    node_to_idx = {n: i for i, n in enumerate(nodes)}
+    N = len(nodes)
+    
+    # Distance Matrix
+    node_coords = df.groupby("fault_radius").agg({"latitude": "mean", "longitude": "mean"})
+    dist_matrix = np.zeros((N, N), dtype=np.float32)
+    for i, ni in enumerate(nodes):
+        for j, nj in enumerate(nodes):
+            dist = haversine(
+                node_coords.loc[ni, "longitude"], node_coords.loc[ni, "latitude"],
+                node_coords.loc[nj, "longitude"], node_coords.loc[nj, "latitude"]
+            )
+            dist_matrix[i, j] = dist
+    dist_tensor = torch.tensor(dist_matrix, dtype=torch.float32)
+
+    # Build Full Time Series History per Node
+    df['month_idx'] = df['datetime'].dt.to_period('M').astype(int)
+    min_month = df['month_idx'].min()
+    max_month = df['month_idx'].max()
+    total_months = max_month - min_month + 1
+    
+    # Feature array: (N, Total_Months, 3)
+    # Features: [Cumulative Count, Max Magnitude, Months Ago]
+    node_history = np.zeros((N, total_months, 3), dtype=np.float32)
+    
+    # Event lookup: node_idx -> {month_idx -> [magnitudes]}
+    events_map = defaultdict(lambda: defaultdict(list))
+    for _, row in df.iterrows():
+        if row['fault_radius'] in node_to_idx:
+            idx = node_to_idx[row['fault_radius']]
+            m_idx = int(row['month_idx']) - min_month
+            if 0 <= m_idx < total_months:
+                events_map[idx][m_idx].append(row['magnitude'])
+
+    print("Computing stateful features over time...")
+    
+    for i in range(N):
+        # State variables
+        cum_count = 0
+        cum_max_mag = 0.0
+        last_event_t = -999 # no events yet
+        
+        for t in range(total_months):
+            # Check for events in this month
+            mags = events_map[i][t]
+            
+            if len(mags) > 0:
+                # Event occurred
+                cum_count += len(mags)
+                current_max = max(mags)
+                if current_max > cum_max_mag:
+                    cum_max_mag = current_max
+                
+                months_ago = 0
+                last_event_t = t
+            else:
+                if last_event_t == -999:
+                    # No event observed yet in dataset just count up from start
+                    months_ago = t + 1 
+                else:
+                    months_ago = t - last_event_t
+            
+            node_history[i, t, 0] = cum_count
+            node_history[i, t, 1] = cum_max_mag
+            node_history[i, t, 2] = months_ago
+
+    # Sliding Windows
+    data_list = []
+    
+    # Valid range for prediction time T: start >= lookback_months, end <= total_months - max_horizon
+    
+    horizon_months = [max(1, h // 30) for h in PREDICTION_HORIZONS]
+    max_horizon_m = max(horizon_months)
+    
+    start_t = lookback_months
+    end_t = total_months - max_horizon_m
+    
+    # Create Spatial Features (Fault Radius Index/ID)
+    x_spatial = np.zeros((N, 1), dtype=np.float32)
+    for i, node_val in enumerate(nodes):
+        x_spatial[i, 0] = float(i)
+
+    print(f"Generating snapshots from t={start_t} to t={end_t}...")
+    
+    for t in range(start_t, end_t):
+        # Input sequence: [t - lookback, ..., t - 1]
+        x_temporal = node_history[:, t-lookback_months:t, :]
+        
+        # Targets: Look ahead from t
+        y = np.zeros((N, len(PREDICTION_HORIZONS)), dtype=np.float32)
+        
+        for i in range(N):
+            for h_idx, h_m in enumerate(horizon_months):
+                # Check if ANY event happens in [t, t + h_m)
+                count_start = node_history[i, t-1, 0]
+                count_end = node_history[i, t+h_m-1, 0]
+                
+                if count_end > count_start:
+                    y[i, h_idx] = 1.0
+                else:
+                    y[i, h_idx] = 0.0
+                    
+        data = Data(
+            x_spatial = torch.tensor(x_spatial, dtype=torch.float32),
+            x_temporal = torch.tensor(x_temporal, dtype=torch.float32), # (N, L, 3)
+            y = torch.tensor(y, dtype=torch.float32),
+            dist_matrix = dist_tensor.clone(),
+            num_nodes = N
+        )
+        data_list.append(data)
+        
+    print(f"Generated {len(data_list)} snapshots.")
+    return data_list, dist_tensor

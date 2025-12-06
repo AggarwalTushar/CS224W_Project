@@ -1,7 +1,7 @@
 from config import LOOKBACK_DAYS, PREDICTION_HORIZONS, DATA_FILE, DIST_THRESHOLD_KM, OUT_DIR, EPOCHS, LR, WEIGHT_DECAY, HIDDEN_DIM, OUT_DIM, DROPOUT, BATCH_SIZE, TRAIN_SPLIT, VAL_SPLIT, USE_RECURRENCE_TIME_TASK
-from data_utils import load_and_prepare_data, build_edge_index, build_temporal_graphs, build_temporal_snapshot_graph, process_repeaters_csv
+from data_utils import load_and_prepare_data, build_temporal_snapshot_graph, process_repeaters_csv
 from plot_utils import plot_training_curves, plot_roc_curves, plot_precision_recall_curves, plot_confusion_matrices, plot_performance_metrics, plot_comprehensive_summary
-from model import RGCN, GraphSAGE, FocalLoss
+from model_rgcn import RGCN, FocalLoss
 import torch
 import torch.optim as optim
 from torch_geometric.loader import DataLoader
@@ -80,7 +80,6 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
             val_targets = torch.cat(val_targets, dim = 0).numpy()
             val_probs = 1 / (1 + np.exp(-val_logits))
             
-            # Calculate AUC for each horizon
             if USE_RECURRENCE_TIME_TASK:
                 history['val_epochs'].append(epoch)
                 mean_val_loss = np.mean(val_losses)
@@ -91,6 +90,7 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
 
                 print(f"Epoch {epoch:03d} | Loss {np.mean(train_losses):.4f} | Val Loss {np.mean(val_losses):.4f}")
             else:
+                # Calculate AUC for each horizon
                 aucs = []
                 for i in range(len(PREDICTION_HORIZONS)):
                     if len(np.unique(val_targets[:, i])) > 1:
