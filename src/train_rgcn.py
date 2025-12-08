@@ -32,7 +32,7 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
     }
     
     if not USE_RECURRENCE_TIME_TASK:
-        history['val_auc']: []
+        history['val_auc'] = []
         for horizon in PREDICTION_HORIZONS:
             history[f'val_auc_{horizon}d'] = []
     
@@ -202,59 +202,12 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
     
     return model#, scaler
 
-def data_as_feature_block(data_list):
-    # Split data
-    data_list = sorted(data_list, key = lambda d: d.sample_date)
-    n_total = len(data_list)
-    n_train = int(0.7 * n_total) # TODO use splits defined in config
-    n_val = int(0.85 * n_total)
-    
-    train_data = data_list[:n_train]
-    val_data = data_list[n_train:n_val]
-    test_data = data_list[n_val:]
-    
-    print(f"Split: Train = {len(train_data)}, Val = {len(val_data)}, Test = {len(test_data)}")
-    
-    # Count total samples
-    train_samples = sum(d.num_active_nodes for d in train_data)
-    val_samples = sum(d.num_active_nodes for d in val_data)
-    test_samples = sum(d.num_active_nodes for d in test_data)
-    print(f"Total samples: Train = {train_samples}, Val = {val_samples}, Test = {test_samples}")
-    
-    # Normalize features
-    train_feats = torch.cat([d.x for d in train_data], dim = 0).numpy()
-    scaler = RobustScaler()
-    scaler.fit(train_feats)
-    
-    for d in train_data:
-        d.x = torch.tensor(scaler.transform(d.x.numpy()), dtype = torch.float32)
-    for d in val_data:
-        d.x = torch.tensor(scaler.transform(d.x.numpy()), dtype = torch.float32)
-    for d in test_data:
-        d.x = torch.tensor(scaler.transform(d.x.numpy()), dtype = torch.float32)
-    
-    # Create PyG DataLoaders
-    train_loader = DataLoader(train_data, batch_size = BATCH_SIZE, shuffle = True)
-    val_loader = DataLoader(val_data, batch_size = BATCH_SIZE, shuffle = False)
-    test_loader = DataLoader(test_data, batch_size = BATCH_SIZE, shuffle = False)
-
-    return train_loader, val_loader, test_loader
-
-def train_graphSAGE_feature_block(feat_dim, train_loader, val_loader, test_loader):
-    # Initialize model
-    feat_dim = next(iter(train_loader))[0].x.shape[1] #train_data[0].x.shape[1]
-    model = GraphSAGE(feat_dim, HIDDEN_DIM, OUT_DIM, len(PREDICTION_HORIZONS), DROPOUT).to(DEVICE)
-    opt = optim.AdamW(model.parameters(), lr = LR, weight_decay = WEIGHT_DECAY)
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0 = 20, T_mult = 2)
-    loss_fn = FocalLoss(alpha = 0.70, gamma = 2.0)
-    return train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_loader)
-
-def train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader):
+def train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader, dist_matrix = None):
     # feat_dim = next(iter(train_loader))[0]["earthquake_source"].x
     # print(feat_dim)
     sample = next(iter(train_loader))[0]
     feat_dim = sample.num_node_features["earthquake_source"]
-    model = RGCN(feat_dim, 4, HIDDEN_DIM, OUT_DIM)
+    model = RGCN(feat_dim, 4, HIDDEN_DIM, OUT_DIM, distance_matrix=dist_matrix)
     opt = optim.AdamW(model.parameters(), lr = LR, weight_decay = WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0 = 20, T_mult = 2)
     if USE_RECURRENCE_TIME_TASK:
@@ -272,8 +225,7 @@ def main():
 
 
     print("Building spatial graphs")
-    # nodes, node_to_idx, edge_index = build_edge_index(df, DIST_THRESHOLD_KM)
-    all_samples = build_temporal_snapshot_graph(df, int(LOOKBACK_DAYS / 30))
+    all_samples, dist_matrix = build_temporal_snapshot_graph(df, int(LOOKBACK_DAYS / 30))
     
     TRAIN_INDEX_END = int(len(all_samples) * TRAIN_SPLIT)
     VAL_INDEX_END = TRAIN_INDEX_END + int(len(all_samples) * VAL_SPLIT)
@@ -281,13 +233,10 @@ def main():
     train_loader = DataLoader(all_samples[:TRAIN_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(all_samples[TRAIN_INDEX_END:VAL_INDEX_END], batch_size=BATCH_SIZE, shuffle=True)
     test_loader = DataLoader(all_samples[VAL_INDEX_END:], batch_size=BATCH_SIZE, shuffle=True)
-
-    # print("Building graphs data")
-    # data_list = build_temporal_graphs(df, nodes, node_to_idx, edge_index, LOOKBACK_DAYS)
     
     print("Training model")
     # model, scaler = train_model(all_samples)
-    model = train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader)
+    model = train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader, dist_matrix)
 
     print("Training complete")
     torch.save({

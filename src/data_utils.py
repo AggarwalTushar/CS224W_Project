@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
+import math
 import torch
 from torch_geometric.data import Data
 from collections import defaultdict
-from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS, USE_LOADING_RATE, USE_RECURRENCE_TIME_TASK
+from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS, USE_LOADING_RATE, USE_RECURRENCE_TIME_TASK, USE_SPATIAL_EDGES, USE_SPATIAL_ATTENTION
 from datetime import datetime, timedelta
 
 def haversine(lon1, lat1, lon2, lat2):
@@ -292,6 +293,7 @@ def get_time_window_subgraph(hetero_data, start_time, context_length):
     subgraph_hetero_sample['earthquake_source'].node_predict = predict_nodes_mask
     subgraph_hetero_sample['earthquake_source'].y = torch.tensor(hetero_data['earthquake_source'].y[node_idx][predict_nodes_mask])
     subgraph_hetero_sample.y = subgraph_hetero_sample['earthquake_source'].y
+    subgraph_hetero_sample.context_length = context_length
     # subgraph_sample.y = subgraph_sample['earthquake_source'].y
 
     # node_idx_lr = np.arange(hetero_data["loading_rate"].num_nodes)
@@ -303,13 +305,26 @@ def get_time_window_subgraph(hetero_data, start_time, context_length):
     return subgraph_hetero_sample
 
 
-def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
+def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     unique_nodes = df["fault_radius"].unique()
     N = len(unique_nodes)
 
-    import math
-    import numpy as np
     group_by_nodes = df.groupby("fault_radius")
+
+    dist_tensor = None
+    if USE_SPATIAL_ATTENTION:
+        # Distance Matrix
+        node_coords = group_by_nodes.agg({"latitude": "mean", "longitude": "mean"})
+        dist_matrix = np.zeros((N, N), dtype=np.float32)
+        for i, ni in enumerate(unique_nodes):
+            for j, nj in enumerate(unique_nodes):
+                dist = haversine(
+                    node_coords.loc[ni, "longitude"], node_coords.loc[ni, "latitude"],
+                    node_coords.loc[nj, "longitude"], node_coords.loc[nj, "latitude"]
+                )
+                dist_matrix[i, j] = dist
+        dist_tensor = torch.tensor(dist_matrix, dtype=torch.float32)
+
     num_nodes = len(group_by_nodes)
     latest_time = math.ceil(max(group_by_nodes.aggregate("max")["event_time"])) * 12
     fault_radii = list(group_by_nodes.count().index)
@@ -326,12 +341,15 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
     node_to_events_this_month = np.zeros((num_nodes, latest_time))
     node_id = 0
 
-    loading_rate_nodes = np.zeros((num_nodes, 1)) # all constant lr for now
+    if USE_LOADING_RATE:
+        loading_rate_nodes = np.zeros((num_nodes, 1)) # all constant lr for now
+    
     for node, group_df in group_by_nodes:
         event_labels = np.zeros((latest_time, len(PREDICTION_HORIZONS)))
         event_times_months = group_df["event_time"] * 12
-        loading_rate = group_df["loading_rate"].iloc[-1] # all constant for now
-        loading_rate_nodes[node_id][0] = loading_rate
+        if USE_LOADING_RATE:
+            loading_rate = group_df["loading_rate"].iloc[-1] # all constant for now
+            loading_rate_nodes[node_id][0] = loading_rate
         prev_event_time = 0
         for event_time in event_times_months:
             # set time since last
@@ -397,7 +415,8 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
         edge_index_spatial.append(torch.stack([src, dst]))
 
     edge_index_spatial = torch.cat(edge_index_spatial, dim=1)
-    hetero_data['earthquake_source', 'spatial', 'earthquake_source'].edge_index = edge_index_spatial
+    if USE_SPATIAL_EDGES:
+        hetero_data['earthquake_source', 'spatial', 'earthquake_source'].edge_index = edge_index_spatial
 
     edge_index_temporal = []
     for t in range(latest_time - 1):
@@ -412,10 +431,8 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6, ):
         edge_index_loading_rate = torch.stack((torch.arange(num_nodes).repeat(latest_time), torch.arange(num_nodes * latest_time)))
         hetero_data['loading_rate', 'lr', 'earthquake_source'].edge_index = edge_index_loading_rate
 
-
-    from torch_geometric.loader import DataLoader
     all_samples = [get_time_window_subgraph(hetero_data, start_time, CONTEXT_LENGTH) for start_time in range(latest_time - CONTEXT_LENGTH + 1)]
-    return all_samples
+    return all_samples, dist_tensor
 
 def build_spatiotemporal_dataset(df, lookback_months=24):
     """

@@ -65,6 +65,51 @@ class SpatialAttention(nn.Module):
         
         return x + self.dropout(out)
 
+    def forward(self, x, bias, spatial_graph_size):
+        B, N, C = x.shape
+        assert N % spatial_graph_size == 0, "N must be divisible by block size"
+
+        num_blocks = N // spatial_graph_size
+
+        # reshape into blocks
+        x = x.view(B, num_blocks, spatial_graph_size, C)
+
+        # normalize
+        h = self.norm(x)
+
+        # QKV
+        qkv = self.qkv_proj(h)                      # (B, num_blocks, M, 3C)
+        q, k, v = qkv.chunk(3, dim=-1)
+
+        # multi-head: (B, num_blocks, M, head_dim)
+        q = q.view(B, num_blocks, spatial_graph_size, self.num_heads, self.head_dim).transpose(2, 3)
+        k = k.view(B, num_blocks, spatial_graph_size, self.num_heads, self.head_dim).transpose(2, 3)
+        v = v.view(B, num_blocks, spatial_graph_size, self.num_heads, self.head_dim).transpose(2, 3)
+        # shapes now: (B, num_blocks, num_heads, M, head_dim)
+
+        # attention scores inside each block only
+        scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(self.head_dim)
+        # scores: (B, num_blocks, num_heads, M, M)
+        # bias: (B, 1, M, M)
+        bias_blocks = bias.expand(B, num_blocks, spatial_graph_size, spatial_graph_size)      # (B, num_blocks, M, M)
+        bias_blocks = bias_blocks.unsqueeze(2)              # (B, num_blocks, 1, M, M)
+        bias_blocks = bias_blocks.expand(B, num_blocks, self.num_heads, spatial_graph_size, spatial_graph_size)  # (B, num_blocks, num_heads, M, M)
+        scores = scores + self.beta * bias_blocks
+
+        attn = torch.softmax(scores, dim=-1)
+        attn = self.dropout(attn)
+
+        # apply attention: (B, num_blocks, num_heads, M, head_dim)
+        out = torch.matmul(attn, v)
+
+        # reshape back to (B, N, C)
+        out = out.transpose(2, 3).contiguous().view(B, N, C)
+
+        out = self.out_proj(out)
+
+        return x.view(B, N, C) + self.dropout(out)
+
+
 
 class TransformerBlock(nn.Module):
     """One block of transformer message passing
