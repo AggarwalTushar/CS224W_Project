@@ -111,7 +111,7 @@ class SpatialAttention(nn.Module):
 
 class RGCN(nn.Module):
     """
-    Graph neural network for predicting multiple time horizons
+    RGCNConv based HeteroGNN model applied to temporal snapshot graph.
     """
     def __init__(self, in_channels, num_layers = 7, hidden_dim = 256, out_dim = 128, n_horizons = 3, dropout = 0.4, num_spatial_att_heads = 2, distance_matrix = None):
         super().__init__()

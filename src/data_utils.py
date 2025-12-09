@@ -298,6 +298,7 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     unique_nodes = df["fault_radius"].unique()
     N = len(unique_nodes)
 
+    # Fault radius is the unique ID
     group_by_nodes = df.groupby("fault_radius")
 
     dist_tensor = None
@@ -333,7 +334,7 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
     if USE_LOADING_RATE:
         loading_rate_nodes = np.zeros((num_nodes, 1)) # all constant lr for now
     
-    for node, group_df in group_by_nodes:
+    for _, group_df in group_by_nodes:
         event_labels = np.zeros((latest_time, len(PREDICTION_HORIZONS)))
         event_times_months = group_df["event_time"] * 12
         if USE_LOADING_RATE:
@@ -348,16 +349,15 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
             curr = node_to_events_this_month[node_id, math.floor(event_time)] #magnitude as a substitute for amount of slip
             node_to_events_this_month[node_id, math.floor(event_time)] += group_df["magnitude"].iloc[event_idx]
             if curr > 0:
-                print("warning, we will be adding magnitudes for a feature. this is no good.")
+                print("Warning, we will be adding magnitudes for a feature. this is no good.")
 
-            #TODO add magnitudes as a feature
             if USE_RECURRENCE_TIME_TASK:
-                # set remaining recurrence time
+                # Set remaining recurrence time (regression task)
                 start_id_label = math.floor(prev_event_time)
                 end_id_label = math.floor(event_time)
                 node_to_time_to_next[node_id, start_id_label:end_id_label] = np.arange(end_id_label - start_id_label, end_id_label - end_id_label, -1, dtype=float)
             else:
-                # set horizon labels
+                # Set horizon labels (classification task)
                 for horizon_idx, pred_horizon in enumerate(PREDICTION_HORIZONS):
                     max_offset = -(int(pred_horizon / 30) - 1)
                     for offset in range(0, max_offset - 1, -1):
@@ -366,7 +366,7 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
                             event_labels[curr_time_idx + offset, horizon_idx] = 1
 
             prev_event_time = event_time
-        # set monthly events
+        # Set monthly events
         for j in range(CONTEXT_LENGTH, event_labels.shape[0]):
             events_stream_for_node = event_labels[j-CONTEXT_LENGTH:j, 0]
             node_to_events_per_month[node_id, j] = np.mean(events_stream_for_node)
@@ -377,15 +377,12 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
             node_to_event_labels[node_id] = event_labels
         node_id += 1
 
+    # Build HeteroData
     hetero_data = HeteroData()
     hetero_data["earthquake_source"].y = torch.tensor(node_to_event_labels.reshape((num_nodes * latest_time, label_dim), order="F"), dtype=torch.float32)
     fault_radii_feat = torch.tensor(fault_radii * latest_time).unsqueeze(-1)
-    # fault_radii_feat /= fault_radii_feat.max()
-    # labels_as_feat = hetero_data["earthquake_source"].y[:, 0].unsqueeze(-1)
     time_since_last_feat = torch.tensor(node_to_time_since_last.flatten(order="F")).unsqueeze(-1)
-    # time_since_last_feat /= time_since_last_feat.max()
     events_per_month_feat = torch.tensor(node_to_events_per_month.flatten(order="F")).unsqueeze(-1)
-    # events_per_month_feat /= events_per_month_feat.max()
     features = torch.hstack([fault_radii_feat, time_since_last_feat, events_per_month_feat]).float()
     if USE_RECURRENCE_TIME_TASK:
         #we can use if there was an earthquake this month as a feature since we want to predict the next event
@@ -393,7 +390,6 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
         features = torch.hstack((features, events_this_month_feat)).float()
     hetero_data["earthquake_source"].x = features
 
-    # hetero_data["earthquake_source"].x = hetero_data["earthquake_source"].x / hetero_data["earthquake_source"].x.norm()
     hetero_data["earthquake_source"].t = torch.arange(latest_time).repeat_interleave(N)
 
     if USE_LOADING_RATE:

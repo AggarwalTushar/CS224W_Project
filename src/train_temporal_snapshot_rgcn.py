@@ -75,7 +75,6 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
                 for batch in val_loader:
                     batch = batch.to(DEVICE)
                     logits = model(batch)
-                    # targets = batch.y[batch.node_mask]
                     targets = batch.y
                     val_loss = loss_fn(logits, targets)
                     val_logits.append(logits.cpu())
@@ -136,7 +135,6 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
         for batch in test_loader:
             batch = batch.to(DEVICE)
             logits = model(batch)
-            # targets = batch.y[batch.node_mask]
             targets = batch.y
             test_logits.append(logits.cpu())
             test_targets.append(targets.cpu())
@@ -209,8 +207,6 @@ def train_model(model, opt, scheduler, loss_fn, train_loader, val_loader, test_l
     return model#, scaler
 
 def train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader, dist_matrix = None):
-    # feat_dim = next(iter(train_loader))[0]["earthquake_source"].x
-    # print(feat_dim)
     sample = next(iter(train_loader))[0]
     feat_dim = sample.num_node_features["earthquake_source"]
     model = RGCN(feat_dim, NUM_LAYERS, HIDDEN_DIM, OUT_DIM, distance_matrix=dist_matrix)
@@ -247,7 +243,7 @@ def main():
     print("Training complete")
     torch.save({
         'model_state': model.state_dict(),
-        # 'scaler': scaler, #TODO add this back in
+        # 'scaler': scaler,
         # 'nodes': nodes,
         # 'edge_index': edge_index
     }, os.path.join(OUT_DIR, "rgcn_unified.pth"))
@@ -261,13 +257,9 @@ def main():
             if USE_RECURRENCE_TIME_TASK:
                 records.append({
                     'time_index': t,
-                    # 'sample_date': pd.Timestamp(sample_date) if sample_date is not None else None,
                     'node_idx': int(node_idx),
-                    # 'horizon_days': int(horizon),
                     'true_label': float(sample.y[node_idx, 0]),
                     'predicted_label': float(node_pred),
-                    # 'prob_no_slip': 1.0 - p,
-                    # 'prob_slip': p
                 })
             else:
                 for h_idx, horizon in enumerate(PREDICTION_HORIZONS):
