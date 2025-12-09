@@ -27,5 +27,15 @@ This project focuses on predicting future earthquake events Graph Neural Network
    pip install -r requirements.txt
    ```
 
+## Training
+
+### Transformer notebook
+
+Install dependencies:
+```bash
+pip install -r requirements.txt 
+```
+Run the transformer interactively in a Jupyter notebook. The transformer notebook is in `src/train_transformer.ipynb` 
+
 ## Acknowledgments
 We would like to thank the instructors and TAs of the CS224W course for their guidance and support throughout the quarter.

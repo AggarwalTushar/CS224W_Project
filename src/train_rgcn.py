@@ -1,4 +1,4 @@
-from config import LOOKBACK_DAYS, PREDICTION_HORIZONS, DATA_FILE, DIST_THRESHOLD_KM, OUT_DIR, EPOCHS, LR, WEIGHT_DECAY, HIDDEN_DIM, OUT_DIM, DROPOUT, BATCH_SIZE, TRAIN_SPLIT, VAL_SPLIT, USE_RECURRENCE_TIME_TASK
+from config import LOOKBACK_DAYS, PREDICTION_HORIZONS, DATA_FILE, DIST_THRESHOLD_KM, OUT_DIR, EPOCHS, LR, WEIGHT_DECAY, HIDDEN_DIM, OUT_DIM, DROPOUT, BATCH_SIZE, TRAIN_SPLIT, VAL_SPLIT, USE_RECURRENCE_TIME_TASK, NUM_LAYERS
 from data_utils import load_and_prepare_data, build_temporal_snapshot_graph, process_repeaters_csv
 from plot_utils import plot_training_curves, plot_roc_curves, plot_precision_recall_curves, plot_confusion_matrices, plot_performance_metrics, plot_comprehensive_summary
 from model_rgcn import RGCN, FocalLoss
@@ -11,6 +11,12 @@ import numpy as np
 import pandas as pd
 import os
 os.makedirs(OUT_DIR, exist_ok=True)
+
+torch.manual_seed(1)
+torch.cuda.manual_seed(2)
+np.random.seed(3)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -207,7 +213,7 @@ def train_rGCN_temporal_snapshot(train_loader, val_loader, test_loader, dist_mat
     # print(feat_dim)
     sample = next(iter(train_loader))[0]
     feat_dim = sample.num_node_features["earthquake_source"]
-    model = RGCN(feat_dim, 4, HIDDEN_DIM, OUT_DIM, distance_matrix=dist_matrix)
+    model = RGCN(feat_dim, NUM_LAYERS, HIDDEN_DIM, OUT_DIM, distance_matrix=dist_matrix)
     opt = optim.AdamW(model.parameters(), lr = LR, weight_decay = WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(opt, T_0 = 20, T_mult = 2)
     if USE_RECURRENCE_TIME_TASK:
@@ -245,21 +251,40 @@ def main():
         # 'nodes': nodes,
         # 'edge_index': edge_index
     }, os.path.join(OUT_DIR, "rgcn_unified.pth"))
-
+    
     records = []
     for t, sample in enumerate(all_samples):
         out = model(sample)
+        probs = torch.sigmoid(out.detach()).cpu().numpy()
+        targets = sample.y.numpy()
         for node_idx, node_pred in enumerate(out):
-            records.append({
-                'time_index': t,
-                # 'sample_date': pd.Timestamp(sample_date) if sample_date is not None else None,
-                'node_idx': int(node_idx),
-                # 'horizon_days': int(horizon),
-                'true_label': float(sample.y[node_idx, 0]),
-                'predicted_label': float(node_pred),
-                # 'prob_no_slip': 1.0 - p,
-                # 'prob_slip': p
-            })
+            if USE_RECURRENCE_TIME_TASK:
+                records.append({
+                    'time_index': t,
+                    # 'sample_date': pd.Timestamp(sample_date) if sample_date is not None else None,
+                    'node_idx': int(node_idx),
+                    # 'horizon_days': int(horizon),
+                    'true_label': float(sample.y[node_idx, 0]),
+                    'predicted_label': float(node_pred),
+                    # 'prob_no_slip': 1.0 - p,
+                    # 'prob_slip': p
+                })
+            else:
+                for h_idx, horizon in enumerate(PREDICTION_HORIZONS):
+                    p = float(probs[node_idx, h_idx])
+                    pred = int(p > 0.5)
+                    true = int(targets[node_idx, h_idx])
+
+                    records.append({
+                        'time_index': t,
+                        # 'sample_date': pd.Timestamp(sample_date) if sample_date is not None else None,
+                        'node_idx': int(node_idx),
+                        'horizon_days': int(horizon),
+                        'true_label': true,
+                        'predicted_label': pred,
+                        'prob_no_slip': 1.0 - p,
+                        'prob_slip': p
+                    })
     # Create DataFrame
     pred_df = pd.DataFrame.from_records(records)
 

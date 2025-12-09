@@ -284,24 +284,13 @@ def get_time_window_subgraph(hetero_data, start_time, context_length):
         "earthquake_source": node_idx,
     }
     subgraph_hetero_sample = hetero_data.subgraph(subset_dict)
-    # subgraph_sample = HeteroData()
-    # subgraph_sample['earthquake_source'].x = hetero_data['earthquake_source'].x[node_idx]
-    # subgraph_sample['earthquake_source'].t = hetero_data['earthquake_source'].t[node_idx]
+
     predict_nodes_mask = subgraph_hetero_sample['earthquake_source'].t == start_time + context_length - 1
-    # predict_nodes = np.nonzero(predict_nodes_mask)
-    # nonzero = np.count_nonzero(predict_nodes_mask)
+
     subgraph_hetero_sample['earthquake_source'].node_predict = predict_nodes_mask
     subgraph_hetero_sample['earthquake_source'].y = torch.tensor(hetero_data['earthquake_source'].y[node_idx][predict_nodes_mask])
     subgraph_hetero_sample.y = subgraph_hetero_sample['earthquake_source'].y
     subgraph_hetero_sample.context_length = context_length
-    # subgraph_sample.y = subgraph_sample['earthquake_source'].y
-
-    # node_idx_lr = np.arange(hetero_data["loading_rate"].num_nodes)
-
-    # for edge_type in hetero_data.edge_types:
-    #     if edge_type[0] == edge_type[2]:
-    #         edge_index, edge_mask = subgraph(node_idx, hetero_data[edge_type].edge_index, relabel_nodes=True)
-    #         subgraph_sample[edge_type].edge_index = edge_index
     return subgraph_hetero_sample
 
 
@@ -351,15 +340,17 @@ def build_temporal_snapshot_graph(df, CONTEXT_LENGTH = 6):
             loading_rate = group_df["loading_rate"].iloc[-1] # all constant for now
             loading_rate_nodes[node_id][0] = loading_rate
         prev_event_time = 0
-        for event_time in event_times_months:
+        for event_idx, event_time in enumerate(event_times_months):
             # set time since last
             start_id = math.floor(prev_event_time) + 1 # we might not want this +1 for recurrence task
             end_id = math.floor(event_time) + 1
             node_to_time_since_last[node_id, start_id:end_id] = np.arange(0, end_id - start_id)
-            node_to_events_this_month[node_id, math.floor(event_time)] += 1
+            curr = node_to_events_this_month[node_id, math.floor(event_time)] #magnitude as a substitute for amount of slip
+            node_to_events_this_month[node_id, math.floor(event_time)] += group_df["magnitude"].iloc[event_idx]
+            if curr > 0:
+                print("warning, we will be adding magnitudes for a feature. this is no good.")
 
             #TODO add magnitudes as a feature
-
             if USE_RECURRENCE_TIME_TASK:
                 # set remaining recurrence time
                 start_id_label = math.floor(prev_event_time)
