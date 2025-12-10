@@ -9,7 +9,7 @@ HIDDEN_DIM = 64
 OUT_DIM = 64
 DROPOUT = 0.3
 BATCH_SIZE = 64  # Batch size for graphs (each graph = one time window)
-OUT_DIR = "./model/"
+OUT_DIR = "../model/"
 
 TRAIN_SPLIT = .7
 VAL_SPLIT = .2
@@ -17,7 +17,7 @@ TEST_SPLIT = .1
 
 # rGCN
 USE_LOADING_RATE = False
-USE_RECURRENCE_TIME_TASK = True
+USE_RECURRENCE_TIME_TASK = False
 USE_SPATIAL_EDGES = True
 USE_SPATIAL_ATTENTION = False
 NUM_LAYERS = 4

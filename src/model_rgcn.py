@@ -1,7 +1,6 @@
 from torch_geometric.nn import BatchNorm, RGCNConv
 import torch, torch.nn as nn
 import math
-from config import USE_LOADING_RATE, USE_RECURRENCE_TIME_TASK, USE_SPATIAL_EDGES, USE_SPATIAL_ATTENTION
 
 class DistanceBias(nn.Module):
     """Computes distance bias for spatial attention."""
@@ -113,14 +112,21 @@ class RGCN(nn.Module):
     """
     RGCNConv based HeteroGNN model applied to temporal snapshot graph.
     """
-    def __init__(self, in_channels, num_layers = 7, hidden_dim = 256, out_dim = 128, n_horizons = 3, dropout = 0.4, num_spatial_att_heads = 2, distance_matrix = None):
+    def __init__(self, in_channels, num_layers = 7, hidden_dim = 256, out_dim = 128, n_horizons = 3, dropout = 0.4, num_spatial_att_heads = 2, distance_matrix = None, use_regression_task = False, use_loading_rate = False, use_spatial_edges = False, use_spatial_attention = True):
         super().__init__()
         
         self.num_layers = num_layers
         self.hidden_dim = hidden_dim
-        num_relations = 1 + USE_LOADING_RATE + USE_SPATIAL_EDGES
 
-        if USE_SPATIAL_EDGES and USE_SPATIAL_ATTENTION:
+        self.use_regression_task = use_regression_task
+
+        self.use_loading_rate = use_loading_rate
+        self.use_spatial_edges = use_spatial_edges
+        self.use_spatial_attention = use_spatial_attention
+
+        num_relations = 1 + self.use_loading_rate + self.use_spatial_edges
+
+        if self.use_spatial_edges and self.use_spatial_attention:
             print("WARNING: using USE_SPATIAL_EDGES and USE_SPATIAL ATTENTION are both true. You probably don't want this.")
 
         self.conv1 = RGCNConv(in_channels, hidden_dim, num_relations)
@@ -128,10 +134,10 @@ class RGCN(nn.Module):
         self.conv_layers = [RGCNConv(hidden_dim, hidden_dim, num_relations) for _ in range(num_layers - 1)]
         self.bn_layers = [BatchNorm(hidden_dim) for _ in range(num_layers - 1)]
         
-        if USE_SPATIAL_ATTENTION:
+        if self.use_spatial_attention:
             if distance_matrix == None:
                 raise RuntimeError("no distance matrix provided for spatial attention")
-            self.spatial_attention = SpatialAttention(hidden_dim, 2)
+            self.spatial_attention = SpatialAttention(hidden_dim, num_spatial_att_heads)
             self.distance_bias = DistanceBias()
             self.distance_matrix = distance_matrix
 
@@ -170,11 +176,11 @@ class RGCN(nn.Module):
         x = self.activation(x)
         x = self.dropout(x)
 
-        if USE_SPATIAL_ATTENTION:
+        if self.use_spatial_attention:
             dist_bias = self.distance_bias(self.distance_matrix)
 
         for i in range(self.num_layers - 1):
-            if USE_SPATIAL_ATTENTION:
+            if self.use_spatial_attention:
                 num_graphs = 1 if not hasattr(hetero_data, "num_graphs") else hetero_data.num_graphs
                 graph_size = int(x.shape[0] / num_graphs)
                 # hacky way to deal with batches
@@ -194,7 +200,7 @@ class RGCN(nn.Module):
         prediction_nodes = x[homogeneous_data.node_predict, :]
 
         # Multi-task predictions
-        if USE_RECURRENCE_TIME_TASK:
+        if self.use_regression_task:
             outputs = self.regression_head(prediction_nodes)
         else:
             outputs = [head(prediction_nodes).squeeze(-1) for head in self.heads]
