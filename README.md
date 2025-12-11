@@ -35,4 +35,4 @@ This project focuses on predicting future earthquake events Graph Neural Network
 
 
 ## Acknowledgments
-We would like to thank the instructors and TAs of the CS224W course for their guidance and support throughout the quarter. 
+We would like to thank the instructors, our mentor TA (Harper Hua) and all other TAs of the CS224W course for their guidance and support throughout the quarter. We are also deeply thankful to Prof. William Ellsworth for his valuable advice and insightful discussions, which greatly strengthened this work.
