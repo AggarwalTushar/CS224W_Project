@@ -9,6 +9,7 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support, accuracy_score
 import numpy as np
 import os
+import random
 os.makedirs(OUT_DIR, exist_ok=True)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -222,6 +223,14 @@ def train_model(data_list, epochs=EPOCHS):
 
 
 def main():
+    # Set random seeds for reproducibility
+    torch.manual_seed(42)
+    np.random.seed(42)
+    random.seed(42)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(42)
+        torch.cuda.manual_seed_all(42)
+    
     print("Loading data...")
     df = load_and_prepare_data(DATA_FILE)
     
