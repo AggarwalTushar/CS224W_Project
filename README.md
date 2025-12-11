@@ -26,6 +26,13 @@ This project focuses on predicting future earthquake events Graph Neural Network
    ```bash
    pip install -r requirements.txt
    ```
+3. Run the training script:
+   To train the graphSage model, execute the following command:
+   ```bash
+   python src/train_graphsage.py
+   ```
+   For all the other models, we have provided a Jupyter notebook `train_{model_name}.ipynb` in the `src/` directory. Open the notebook and run the cells sequentially to train and evaluate the models.
+
 
 ## Acknowledgments
-We would like to thank the instructors and TAs of the CS224W course for their guidance and support throughout the quarter.
+We would like to thank the instructors and TAs of the CS224W course for their guidance and support throughout the quarter. 
