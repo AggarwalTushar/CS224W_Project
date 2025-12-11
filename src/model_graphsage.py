@@ -54,7 +54,6 @@ class GraphSAGE(nn.Module):
         x = self.conv4(x, edge_index)
         x = self.bn4(x)
         
-        
         # Multi-task predictions
         outputs = [head(x).squeeze(-1) for head in self.heads]
         outputs = torch.stack(outputs, dim = 1) 

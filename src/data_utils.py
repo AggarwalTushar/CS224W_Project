@@ -1,13 +1,18 @@
 import numpy as np
 import pandas as pd
+import math
 import torch
 from torch_geometric.data import Data
 from collections import defaultdict
 from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS
 from datetime import datetime, timedelta
 
+from sklearn.preprocessing import RobustScaler
+
 def haversine(lon1, lat1, lon2, lat2):
-    "Calculates distance between two coordinates"
+    """
+    Calculates distance between two coordinates
+    """
     R = 6371.0
     lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1
@@ -95,21 +100,17 @@ def process_repeaters_csv(path):
 
 def load_and_prepare_data(path):
     
-    if path.endswith("repeaters.csv"):
-        # Handle the new Repeaters dataset
-        df = process_repeaters_csv(path)
+    # Handle the original Synthetic dataset (Excel)
+    df = pd.read_excel(path)
+    df.columns = [c.strip().lower() for c in df.columns]
+    
+    # Convert time to datetime
+    if np.issubdtype(df["event_time"].dtype, np.number):
+        # Assume it's years since 2000
+        ref = pd.Timestamp("2000-01-01")
+        df["datetime"] = [ref + pd.DateOffset(months=int(y*12)) for y in df["event_time"].values]
     else:
-        # Handle the original Synthetic dataset (Excel)
-        df = pd.read_excel(path)
-        df.columns = [c.strip().lower() for c in df.columns]
-        
-        # Convert time to datetime
-        if np.issubdtype(df["event_time"].dtype, np.number):
-            # Assume it's years since 2000
-            ref = pd.Timestamp("2000-01-01")
-            df["datetime"] = [ref + pd.DateOffset(months=int(y*12)) for y in df["event_time"].values]
-        else:
-            df["datetime"] = pd.to_datetime(df["event_time"], errors="coerce")
+        df["datetime"] = pd.to_datetime(df["event_time"], errors="coerce")
     
     df = df.sort_values("datetime").reset_index(drop=True)
     print(f"Loaded {len(df)} events from {df['datetime'].min()} to {df['datetime'].max()}")
@@ -117,7 +118,9 @@ def load_and_prepare_data(path):
 
 
 def build_edge_index(df, dist_thresh_km = DIST_THRESHOLD_KM):
-    """Build edge_index in COO format for PyG"""
+    """
+    Build edge_index in COO format for PyG
+    """
     nodes = sorted(df["fault_radius"].unique())
     node_to_idx = {n: i for i, n in enumerate(nodes)}
     N = len(nodes)
@@ -152,7 +155,9 @@ def build_edge_index(df, dist_thresh_km = DIST_THRESHOLD_KM):
 
 
 def extract_node_features(hist_events, lookback_days):
-    """Extract features from historical events at a single node"""
+    """
+    Extract features from historical events at a single node
+    """
     features = []
     
     # 1. Basic counts and recency (4 features)
@@ -252,7 +257,6 @@ def build_temporal_graphs(df, nodes, node_to_idx, edge_index, lookback_days = LO
                 # Extract features
                 x[node_idx] = extract_node_features(hist_events, lookback_days)
                 
-                
                 # Compute targets for multiple horizons
                 for h_idx, horizon in enumerate(PREDICTION_HORIZONS):
                     future_start = sample_date
@@ -275,6 +279,156 @@ def build_temporal_graphs(df, nodes, node_to_idx, edge_index, lookback_days = LO
     
     return data_list
 
+from torch_geometric.data import HeteroData
+def get_time_window_subgraph(hetero_data, start_time, context_length):
+    mask = (hetero_data["earthquake_source"].t >= start_time) & (hetero_data["earthquake_source"].t < (start_time + context_length))
+    node_idx = torch.nonzero(mask).view(-1)
+    subset_dict = {
+        "earthquake_source": node_idx,
+    }
+    subgraph_hetero_sample = hetero_data.subgraph(subset_dict)
+
+    predict_nodes_mask = subgraph_hetero_sample['earthquake_source'].t == start_time + context_length - 1
+
+    subgraph_hetero_sample['earthquake_source'].node_predict = predict_nodes_mask
+    subgraph_hetero_sample['earthquake_source'].y = torch.tensor(hetero_data['earthquake_source'].y[node_idx][predict_nodes_mask])
+    subgraph_hetero_sample.y = subgraph_hetero_sample['earthquake_source'].y
+    subgraph_hetero_sample.context_length = context_length
+    return subgraph_hetero_sample
+
+
+def build_temporal_snapshot_graph(df, use_regression_task=False, use_spatial_edges=True, use_spatial_attention=False, use_loading_rates=False, CONTEXT_LENGTH = 6):
+    """Builds the temporal snapshot graph for HeteroGNN/rGCN"""
+    unique_nodes = df["fault_radius"].unique()
+    N = len(unique_nodes)
+
+    # Fault radius is the unique ID
+    group_by_nodes = df.groupby("fault_radius")
+
+    dist_tensor = None
+    if use_spatial_attention:
+        # Distance Matrix
+        node_coords = group_by_nodes.agg({"latitude": "mean", "longitude": "mean"})
+        dist_matrix = np.zeros((N, N), dtype=np.float32)
+        for i, ni in enumerate(unique_nodes):
+            for j, nj in enumerate(unique_nodes):
+                dist = haversine(
+                    node_coords.loc[ni, "longitude"], node_coords.loc[ni, "latitude"],
+                    node_coords.loc[nj, "longitude"], node_coords.loc[nj, "latitude"]
+                )
+                dist_matrix[i, j] = dist
+        dist_tensor = torch.tensor(dist_matrix, dtype=torch.float32)
+
+    num_nodes = len(group_by_nodes)
+    latest_time = math.ceil(max(group_by_nodes.aggregate("max")["event_time"])) * 12
+    fault_radii = list(group_by_nodes.count().index)
+
+    if use_regression_task:
+        node_to_event_labels = np.zeros((num_nodes, latest_time), dtype=float)
+        label_dim = 1
+    else:
+        node_to_event_labels = np.empty((num_nodes, latest_time, len(PREDICTION_HORIZONS)))
+        label_dim = len(PREDICTION_HORIZONS)
+    node_to_time_since_last = np.zeros((num_nodes, latest_time))
+    node_to_time_to_next = np.zeros((num_nodes, latest_time), dtype=float) - 1
+    node_to_events_per_month = np.zeros((num_nodes, latest_time))
+    node_to_events_this_month = np.zeros((num_nodes, latest_time))
+    node_id = 0
+
+    # Add loading rate global nodes. Note, real data doesn't have this but we can use it for synthetic.
+    if use_loading_rates:
+        loading_rate_nodes = np.zeros((num_nodes, 1)) # all constant lr for now
+    
+    for _, group_df in group_by_nodes:
+        event_labels = np.zeros((latest_time, len(PREDICTION_HORIZONS)))
+        event_times_months = group_df["event_time"] * 12
+        if use_loading_rates:
+            loading_rate = group_df["loading_rate"].iloc[-1] # all constant for now
+            loading_rate_nodes[node_id][0] = loading_rate
+        prev_event_time = 0
+        for event_idx, event_time in enumerate(event_times_months):
+            # set time since last
+            start_id = math.floor(prev_event_time) + 1 # we might not want this +1 for recurrence task
+            end_id = math.floor(event_time) + 1
+            node_to_time_since_last[node_id, start_id:end_id] = np.arange(0, end_id - start_id)
+            curr = node_to_events_this_month[node_id, math.floor(event_time)] #magnitude as a substitute for amount of slip
+            node_to_events_this_month[node_id, math.floor(event_time)] += group_df["magnitude"].iloc[event_idx]
+            if curr > 0:
+                print("Warning, we will be adding magnitudes for a feature. this is no good.")
+
+            if use_regression_task:
+                # Set remaining recurrence time (regression task)
+                start_id_label = math.floor(prev_event_time)
+                end_id_label = math.floor(event_time)
+                node_to_time_to_next[node_id, start_id_label:end_id_label] = np.arange(end_id_label - start_id_label, end_id_label - end_id_label, -1, dtype=float)
+            else:
+                # Set horizon labels (classification task)
+                for horizon_idx, pred_horizon in enumerate(PREDICTION_HORIZONS):
+                    max_offset = -(int(pred_horizon / 30) - 1)
+                    for offset in range(0, max_offset - 1, -1):
+                        curr_time_idx = math.floor(event_time)
+                        if curr_time_idx + offset >= 0:
+                            event_labels[curr_time_idx + offset, horizon_idx] = 1
+
+            prev_event_time = event_time
+        # Set monthly events
+        for j in range(CONTEXT_LENGTH, event_labels.shape[0]):
+            events_stream_for_node = event_labels[j-CONTEXT_LENGTH:j, 0]
+            node_to_events_per_month[node_id, j] = np.mean(events_stream_for_node)
+
+        if use_regression_task:
+            node_to_event_labels[node_id] = node_to_time_to_next[node_id]
+        else:
+            node_to_event_labels[node_id] = event_labels
+        node_id += 1
+
+    # Build HeteroData
+    hetero_data = HeteroData()
+    hetero_data["earthquake_source"].y = torch.tensor(node_to_event_labels.reshape((num_nodes * latest_time, label_dim), order="F"), dtype=torch.float32)
+    fault_radii_feat = torch.tensor(fault_radii * latest_time).unsqueeze(-1)
+    time_since_last_feat = torch.tensor(node_to_time_since_last.flatten(order="F")).unsqueeze(-1)
+    events_per_month_feat = torch.tensor(node_to_events_per_month.flatten(order="F")).unsqueeze(-1)
+    features = torch.hstack([fault_radii_feat, time_since_last_feat, events_per_month_feat]).float()
+    if use_regression_task:
+        #we can use if there was an earthquake this month as a feature since we want to predict the next event
+        events_this_month_feat = torch.tensor(node_to_events_this_month.flatten(order="F")).unsqueeze(-1)
+        features = torch.hstack((features, events_this_month_feat)).float()
+
+    scaler = RobustScaler()
+    scaler.fit(features)
+    features = torch.tensor(scaler.transform(features)).float()
+    hetero_data["earthquake_source"].x = features
+
+    hetero_data["earthquake_source"].t = torch.arange(latest_time).repeat_interleave(N)
+
+    if use_loading_rates:
+        hetero_data["loading_rate"].x = torch.hstack((torch.tensor(loading_rate_nodes), torch.zeros((loading_rate_nodes.shape[0], 2)))).float()
+
+    edge_index_spatial = []
+    for t in range(latest_time):
+        src = torch.arange(num_nodes - 1) + t * num_nodes
+        dst = src + 1
+        edge_index_spatial.append(torch.stack([src, dst]))
+
+    edge_index_spatial = torch.cat(edge_index_spatial, dim=1)
+    if use_spatial_edges:
+        hetero_data['earthquake_source', 'spatial', 'earthquake_source'].edge_index = edge_index_spatial
+
+    edge_index_temporal = []
+    for t in range(latest_time - 1):
+        src = torch.arange(num_nodes) + t * num_nodes
+        dst = src + num_nodes
+        edge_index_temporal.append(torch.stack([src, dst]))
+
+    edge_index_temporal = torch.cat(edge_index_temporal, dim=1)
+    hetero_data['earthquake_source', 'temporal', 'earthquake_source'].edge_index = edge_index_temporal
+
+    if use_loading_rates:
+        edge_index_loading_rate = torch.stack((torch.arange(num_nodes).repeat(latest_time), torch.arange(num_nodes * latest_time)))
+        hetero_data['loading_rate', 'lr', 'earthquake_source'].edge_index = edge_index_loading_rate
+
+    all_samples = [get_time_window_subgraph(hetero_data, start_time, CONTEXT_LENGTH) for start_time in range(latest_time - CONTEXT_LENGTH + 1)]
+    return all_samples, dist_tensor
 
 def build_spatiotemporal_dataset(df, lookback_months=24):
     """

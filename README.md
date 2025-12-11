@@ -10,7 +10,7 @@ Project work for CSS224W Course (Autumn 25)
 This project focuses on predicting future earthquake events Graph Neural Networks (GNNs). We utilize a real-world dataset, where nodes represent geographic locations and times and edges represent interactions. The goal is to predict whether a location will face earthquake in the future based on historical data.
 
 ## Repository Structure
-- `data/`: Contains the dataset.
+- `data/`: Contains the dataset and the synthetic data generation scripts.
 - `src/`: Contains source code for data processing, model training, and evaluation.
 - `notebooks/`: Jupyter notebooks for exploratory data analysis.
 - `results/`: Contains results from model training and evaluation.
@@ -26,16 +26,6 @@ This project focuses on predicting future earthquake events Graph Neural Network
    ```bash
    pip install -r requirements.txt
    ```
-
-## Training
-
-### Transformer notebook
-
-Install dependencies:
-```bash
-pip install -r requirements.txt 
-```
-Run the transformer interactively in a Jupyter notebook. The transformer notebook is in `src/train_transformer.ipynb` 
 
 ## Acknowledgments
 We would like to thank the instructors and TAs of the CS224W course for their guidance and support throughout the quarter.

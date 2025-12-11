@@ -1,12 +1,23 @@
 DATA_FILE = "data/synthetic_data.xlsx"
 DIST_THRESHOLD_KM = 50.0
-LOOKBACK_DAYS = 180  # 6 months of history
+LOOKBACK_DAYS = 360  # 6 months of history
 PREDICTION_HORIZONS = [30, 90, 180]  # Predict 1, 3, 6 months ahead
 EPOCHS = 300
 LR = 2e-3
-WEIGHT_DECAY = 1e-5
-HIDDEN_DIM = 256
-OUT_DIM = 256
+WEIGHT_DECAY = 1e-4
+HIDDEN_DIM = 64
+OUT_DIM = 64
 DROPOUT = 0.3
-BATCH_SIZE = 16  # Batch size for graphs (each graph = one time window)
-OUT_DIR = "./model/"
+BATCH_SIZE = 64  # Batch size for graphs (each graph = one time window)
+OUT_DIR = "../model/"
+
+TRAIN_SPLIT = .7
+VAL_SPLIT = .2
+TEST_SPLIT = .1
+
+# rGCN
+USE_LOADING_RATE = False
+USE_RECURRENCE_TIME_TASK = False
+USE_SPATIAL_EDGES = True
+USE_SPATIAL_ATTENTION = False
+NUM_LAYERS = 4
