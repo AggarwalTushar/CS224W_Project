@@ -7,7 +7,9 @@ from config import DIST_THRESHOLD_KM, LOOKBACK_DAYS, PREDICTION_HORIZONS
 from datetime import datetime, timedelta
 
 def haversine(lon1, lat1, lon2, lat2):
-    "Calculates distance between two coordinates"
+    """
+    Calculates distance between two coordinates
+    """
     R = 6371.0
     lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1
@@ -95,21 +97,17 @@ def process_repeaters_csv(path):
 
 def load_and_prepare_data(path):
     
-    if path.endswith("repeaters.csv"):
-        # Handle the new Repeaters dataset
-        df = process_repeaters_csv(path)
+    # Handle the original Synthetic dataset (Excel)
+    df = pd.read_excel(path)
+    df.columns = [c.strip().lower() for c in df.columns]
+    
+    # Convert time to datetime
+    if np.issubdtype(df["event_time"].dtype, np.number):
+        # Assume it's years since 2000
+        ref = pd.Timestamp("2000-01-01")
+        df["datetime"] = [ref + pd.DateOffset(months=int(y*12)) for y in df["event_time"].values]
     else:
-        # Handle the original Synthetic dataset (Excel)
-        df = pd.read_excel(path)
-        df.columns = [c.strip().lower() for c in df.columns]
-        
-        # Convert time to datetime
-        if np.issubdtype(df["event_time"].dtype, np.number):
-            # Assume it's years since 2000
-            ref = pd.Timestamp("2000-01-01")
-            df["datetime"] = [ref + pd.DateOffset(months=int(y*12)) for y in df["event_time"].values]
-        else:
-            df["datetime"] = pd.to_datetime(df["event_time"], errors="coerce")
+        df["datetime"] = pd.to_datetime(df["event_time"], errors="coerce")
     
     df = df.sort_values("datetime").reset_index(drop=True)
     print(f"Loaded {len(df)} events from {df['datetime'].min()} to {df['datetime'].max()}")
@@ -117,7 +115,9 @@ def load_and_prepare_data(path):
 
 
 def build_edge_index(df, dist_thresh_km = DIST_THRESHOLD_KM):
-    """Build edge_index in COO format for PyG"""
+    """
+    Build edge_index in COO format for PyG
+    """
     nodes = sorted(df["fault_radius"].unique())
     node_to_idx = {n: i for i, n in enumerate(nodes)}
     N = len(nodes)
@@ -152,7 +152,9 @@ def build_edge_index(df, dist_thresh_km = DIST_THRESHOLD_KM):
 
 
 def extract_node_features(hist_events, lookback_days):
-    """Extract features from historical events at a single node"""
+    """
+    Extract features from historical events at a single node
+    """
     features = []
     
     # 1. Basic counts and recency (4 features)
