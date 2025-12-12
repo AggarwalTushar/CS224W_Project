@@ -110,9 +110,18 @@ class SpatialAttention(nn.Module):
 
 class RGCN(nn.Module):
     """
-    RGCNConv based HeteroGNN model applied to temporal snapshot graph.
+    RGCNConv based HeteroGNN model, to be applied to temporal snapshot graph.
+    Not to be confused with the HeteroGNN, which reduces to the same message
+    passing (heterogeneous) behavior, but in this project is applied to
+    temporal edge prediction.
     """
     def __init__(self, in_channels, num_layers = 7, hidden_dim = 256, out_dim = 128, n_horizons = 3, dropout = 0.4, num_spatial_att_heads = 2, distance_matrix = None, use_regression_task = False, use_loading_rate = False, use_spatial_edges = False, use_spatial_attention = True):
+        """
+        @param use_loading_rate: determines whether an extra relation should be used where a global node (loading rate) is applied. Note that this is only applicable in the synthetic data.
+        @param use_spatial_edges: uses predefined spatial edges, through normal message passing
+        @param use_spatial_attention: assumes fully connected spatial edges, but learns attention weights based on haversine distance between nodes
+        @param distance_matrix: required for spatial attention, N x N pairwise distance between each node
+        """
         super().__init__()
         
         self.num_layers = num_layers
@@ -127,7 +136,7 @@ class RGCN(nn.Module):
         num_relations = 1 + self.use_loading_rate + self.use_spatial_edges
 
         if self.use_spatial_edges and self.use_spatial_attention:
-            print("WARNING: using USE_SPATIAL_EDGES and USE_SPATIAL ATTENTION are both true. You probably don't want this.")
+            print("WARNING: using USE_SPATIAL_EDGES and USE_SPATIAL_ATTENTION are both true. You probably don't want this.")
 
         self.conv1 = RGCNConv(in_channels, hidden_dim, num_relations)
         self.bn1 = BatchNorm(hidden_dim)
@@ -183,7 +192,6 @@ class RGCN(nn.Module):
             if self.use_spatial_attention:
                 num_graphs = 1 if not hasattr(hetero_data, "num_graphs") else hetero_data.num_graphs
                 graph_size = int(x.shape[0] / num_graphs)
-                # hacky way to deal with batches
                 context_length = hetero_data.context_length if isinstance(hetero_data.context_length, int) else int(hetero_data.context_length[0])
                 spatial_graph_size = graph_size // context_length
                 x = x.view(num_graphs, graph_size, self.hidden_dim)

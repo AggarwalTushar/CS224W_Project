@@ -3,7 +3,7 @@ Project work for CSS224W Course (Autumn 25)
 
 ## Project Members
 - Tushar Aggarwal (email: tushar53@stanford.edu)
-- Brandon Li (email: liubr@stanford.edu)
+- Brandon Liu (email: liubr@stanford.edu)
 - Mete Gumusayak (email: mete1@stanford.edu)
 
 ## Project Overview
@@ -27,7 +27,7 @@ This project focuses on predicting future earthquake events Graph Neural Network
    pip install -r requirements.txt
    ```
 3. Run the training script:
-   To train the graphSage model, execute the following command:
+   To train the GraphSage model, execute the following command:
    ```bash
    python src/train_graphsage.py
    ```
