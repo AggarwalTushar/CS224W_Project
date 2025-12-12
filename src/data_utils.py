@@ -212,7 +212,6 @@ def build_temporal_graphs(df, nodes, node_to_idx, edge_index, lookback_days = LO
     """
     Build ONE graph per time window, with features for ALL nodes
     Each graph contains predictions for all active nodes at that time
-    Builds a temporal edge prediction graph.
     """
     df = df.copy()
     df["node_idx"] = df["fault_radius"].map(node_to_idx)
